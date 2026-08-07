@@ -32,8 +32,13 @@ BLOCK_MIN = 300.0      # over this, definitely a block that needs segmenting
                        # between the two: segment, then sanity-check the result
 
 # Acceptance limits for a cut segment.
-MIN_SPOT = 8.0
+# Real broadcast inventory bottoms out at :10. Anything shorter is a fragment, not a
+# spot, and admitting them is what fills a break with snippets.
+MIN_SPOT = 9.0
 MAX_SPOT = 125.0
+
+# How strongly to prefer a merged reading when the split is weakly evidenced.
+MERGE_BIAS = 0.30
 DEFAULT_CONFIDENCE_FLOOR = 0.55
 
 
@@ -190,7 +195,21 @@ def _merge_oversegmented(
             combined_prior, _ = duration_prior(total)
             # Compare against the best any single fragment manages on its own.
             solo_best = max(duration_prior(g.duration)[0] for g in group)
-            gain = combined_prior - max(solo_best, solo_prior)
+
+            # Bias toward fewer, longer segments when the split is poorly evidenced.
+            #
+            # Without this the commonest real failure is invisible: a 30-second spot cut in
+            # half yields two 15-second fragments, and 15 is itself a canonical length, so
+            # the merged and split readings score identically and the tie goes to the split.
+            # The result is a break full of half-adverts that all look like legitimate spots.
+            #
+            # A break carries four to six commercials, so a detector producing twelve has
+            # over-split. Weighting the bias by how weak the interior boundary is keeps it
+            # honest: a real black-and-silent break between two spots gets no push at all,
+            # while a mere scene change inside one gets a firm one.
+            weakest = 1.0 - max(interior)
+            bias = MERGE_BIAS * (span - 1) * weakest
+            gain = combined_prior - max(solo_best, solo_prior) + bias
 
             if gain > margin and gain > best_gain:
                 best_gain, best_span = gain, span
