@@ -87,9 +87,10 @@ class Box:
 
     def tune(self, channel: int) -> None:
         airing = self.lineup.now(channel, time.time())
-        if airing is None:
+        if airing is None or airing.off_air:
             # Dead air. A real station showed a sign-off card rather than a black screen.
             self.channel = channel
+            self.bug = BugState()
             self.player.show_overlay(
                 r"{\an5\pos(960,540)\fnmonospace\fs42\1c&H00D7FF&}"
                 f"CHANNEL {channel}\\NOFF AIR", overlay_id=2,
@@ -97,7 +98,10 @@ class Box:
             return
 
         self.player.hide_overlay(overlay_id=2)
-        result = self.player.tune(airing.program.path, airing.offset)
+        # `seek`, never `offset`. A programme interrupted by a mid-roll appears twice in the
+        # plan and its second half carries a non-zero `skip` — punching in at `offset` alone
+        # would restart it from the top of the file.
+        result = self.player.tune(airing.program.path, airing.seek)
         self.last_latency_ms = result.latency_ms
         self.channel = channel
         self.bug = BugState(airing=airing, shown_at=time.monotonic())
@@ -187,16 +191,34 @@ class Box:
             self.running = False
 
     def _advance_if_ended(self) -> None:
-        """When a program runs out, join whatever the clock says is on now.
+        """Step to the next plan entry when the current one runs out.
 
-        The clock is authoritative, not the playlist — if the file ended early or the box
-        was asleep, the right answer is still "what should be airing right now".
+        A block is several entries — a programme, its ad pod, the rest of the programme — and
+        they run back to back. Stepping directly is both cheaper and more correct than
+        re-asking the clock: a pod is four to eight entries, and re-querying at each boundary
+        races the very clock it is consulting.
+
+        The clock stays authoritative for everything else. If the file ended early, or the
+        plan is exhausted, or the box was asleep, the right answer is still "what should be
+        airing right now".
         """
-        if self.mode is Mode.MENU:
+        if self.mode is Mode.MENU or not self.player.get_property("idle-active"):
             return
-        idle = self.player.get_property("idle-active")
-        if idle:
-            self.tune(self.channel)
+
+        current = self.bug.airing
+        following = current.next_entry if current else None
+        if following is not None:
+            result = self.player.tune(following.path, following.skip)
+            self.last_latency_ms = result.latency_ms
+            if result.ok:
+                # Re-read the clock for display rather than synthesising an Airing, so the
+                # bug and the schedule can never drift apart.
+                refreshed = self.lineup.now(self.channel, time.time())
+                if refreshed and not refreshed.off_air:
+                    self.bug = BugState(airing=refreshed, shown_at=self.bug.shown_at)
+                return
+
+        self.tune(self.channel)
 
     def _pump(self, driver: Driver) -> None:
         try:
