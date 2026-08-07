@@ -38,12 +38,59 @@ from pathlib import Path
 
 from .cards import card, make_station_ids
 
+VIDEO_SUFFIXES = {".mp4", ".mkv", ".avi", ".mov", ".m4v", ".mpg", ".mpeg",
+                  ".ts", ".webm", ".wmv"}
+
 VENDOR = Path(__file__).resolve().parent.parent / "vendor" / "FieldStation42"
 
 # Folder names inside the media root. These become FS42 "tags" — a tag *is* a directory.
 SHOWS_TAG = "shows"
 COMMERCIAL_TAG = "commercial"
 BUMP_TAG = "bump"
+
+# Rating ladder, least to most permissive. A ceiling is cumulative: a channel rated `family`
+# draws from kids *and* family spots, not family alone.
+#
+# Kept to three tiers on purpose. This is a setting a non-technical person has to understand
+# from the folder name alone, and "how bad can the ads get on this channel" has about three
+# useful answers.
+RATING_LADDER = ("kids", "family", "late")
+
+# What a user might plausibly call those folders. Matching is case- and space-insensitive so
+# "Kids Commercials" and "kids" both land in the same place.
+RATING_ALIASES = {
+    "kids": "kids", "kid": "kids", "children": "kids", "child": "kids",
+    "tvy": "kids", "tvy7": "kids", "g": "kids", "saturdaymorning": "kids",
+    "family": "family", "general": "family", "allages": "family", "pg": "family",
+    "tvg": "family", "tvpg": "family", "daytime": "family",
+    "late": "late", "all": "late", "adult": "late", "primetime": "late",
+    "latenight": "late", "night": "late", "mature": "late", "anything": "late",
+    # The landing zone. Unsorted MUST map to the most restrictive rating: anything
+    # nobody has looked at yet must never be reachable by a kids channel.
+    "unsorted": "late", "inbox": "late", "new": "late", "todo": "late",
+    "unrated": "late", "misc": "late",
+    "tv14": "late", "tvma": "late", "pg13": "late", "r": "late", "everything": "late",
+}
+
+
+def _normalise(name: str) -> str:
+    return "".join(ch for ch in name.lower() if ch.isalnum())
+
+
+def classify_rating(folder_name: str) -> str | None:
+    """Map a user's folder name onto the ladder, or None if it isn't a rating folder."""
+    key = _normalise(folder_name)
+    if key in RATING_ALIASES:
+        return RATING_ALIASES[key]
+    # "Kids Commercials" -> strip the noise word and retry.
+    stripped = key.replace("commercials", "").replace("commercial", "").replace("ads", "")
+    return RATING_ALIASES.get(stripped)
+
+
+def pool_tag(rating: str) -> str:
+    # The 'ads-' prefix is not cosmetic. Bare 'late' collides with upstream's daypart
+    # hint of the same name, and content under it would only ever air late at night.
+    return f"ads-{rating}"
 
 # Never name a content folder any of these. Upstream turns such a path component into a
 # silent temporal restriction, so a folder called "December" only ever airs in December.
@@ -74,12 +121,84 @@ def _placeholder_image(path: Path, heading: str, subheading: str = "") -> None:
     card(path, heading=heading, subheading=subheading)
 
 
+def build_rating_pools(media_root: Path, ads: Path) -> dict[str, str]:
+    """Turn the user's rating folders into cumulative FS42 tags.
+
+    Two problems to solve at once, and one trick solves both.
+
+    A tag *is* a directory upstream, and nesting does not create tags — a file in
+    `Commercials/Kids/` still carries the tag `commercial`, so subfolders alone give one
+    undifferentiated pool. And a ceiling has to be cumulative: a `family` channel should draw
+    from kids spots as well as family ones.
+
+    So each pool is a directory of **symlinks** to every file at or below its rating. Cheap,
+    invisible to upstream (it walks with followlinks=True), and — the part that matters —
+    `os.path.realpath` collapses the links back to one path per real file. That means the
+    cooldown and the perceptual clusters key on the underlying spot, so a commercial present
+    in three pools still cannot air three times in a row.
+
+    Returns {rating: tag} for the pools that actually have content.
+    """
+    found: dict[str, list[Path]] = {}
+    for child in sorted(ads.iterdir()):
+        if not child.is_dir() or child.name.startswith("."):
+            continue
+        rating = classify_rating(child.name)
+        if rating:
+            found.setdefault(rating, []).append(child)
+
+    if not found:
+        return {}
+
+    pools: dict[str, str] = {}
+    for index, rating in enumerate(RATING_LADDER):
+        # Cumulative: everything at this rating and below.
+        sources = [d for r in RATING_LADDER[: index + 1] for d in found.get(r, [])]
+        if not sources:
+            continue
+
+        tag = pool_tag(rating)
+        pool = media_root / tag
+        if pool.exists():
+            for stale in pool.iterdir():
+                if stale.is_symlink():
+                    stale.unlink()
+        pool.mkdir(parents=True, exist_ok=True)
+
+        linked = 0
+        for source in sources:
+            for item in sorted(source.rglob("*")):
+                if not item.is_file() or item.name.startswith("."):
+                    continue
+                if item.suffix.lower() not in VIDEO_SUFFIXES:
+                    continue
+                # Prefix with the rating folder so two spots of the same name in different
+                # tiers cannot collide.
+                link = pool / f"{_normalise(source.name)}__{item.name}"
+                if not link.exists():
+                    link.symlink_to(item.resolve())
+                linked += 1
+        if linked:
+            pools[rating] = tag
+    return pools
+
+
 def arrange_media(
     media_root: Path, programs: Path, ads: Path, channel: int, name: str
-) -> None:
+) -> dict[str, str]:
     media_root.mkdir(parents=True, exist_ok=True)
     _link(programs, media_root / SHOWS_TAG)
-    _link(ads, media_root / COMMERCIAL_TAG)
+
+    pools = build_rating_pools(media_root, ads)
+    if pools:
+        for rating in RATING_LADDER:
+            if rating in pools:
+                count = len(list((media_root / pools[rating]).glob("*")))
+                print(f"  ads         {rating:<7} {count:>4} spots  (tag {pools[rating]})")
+    else:
+        # No rating folders — one flat pool, which is the simplest thing that works.
+        _link(ads, media_root / COMMERCIAL_TAG)
+        print("  ads         one pool (no rating folders found)")
 
     # The bump pool cannot be empty. An empty bump_dir survives the catalog build and then
     # raises NoFillerContentFound during schedule build, because every pod asks for a bumper
@@ -88,6 +207,7 @@ def arrange_media(
     # real channel had anyway. Because we draw them, no content is shipped or licensed.
     made = make_station_ids(media_root / BUMP_TAG, channel, name)
     print(f"  idents      {made['pre']} pre, {made['post']} post (generated)")
+    return pools
 
 
 def build_config(
@@ -97,6 +217,7 @@ def build_config(
     name: str,
     increment: int,
     break_duration: int,
+    commercial_tag: str,
 ) -> dict:
     # One tag every hour of every day. A real lineup varies this by daypart; the skeleton
     # deliberately does not, so that anything that goes wrong is the pipeline's fault.
@@ -107,7 +228,7 @@ def build_config(
         "channel_number": channel,
         "network_type": "standard",          # loop channels can never carry commercials
         "content_dir": str(media_root.resolve()),   # must be absolute
-        "commercial_dir": COMMERCIAL_TAG,
+        "commercial_dir": commercial_tag,
         "bump_dir": BUMP_TAG,                # required by schedule build even when empty
         "commercial_free": False,
         "break_strategy": "standard",        # anything else discards chapter break points
@@ -142,8 +263,19 @@ def check_layout(media_root: Path) -> list[str]:
 def run(args: argparse.Namespace) -> int:
     media_root = args.media_root.resolve()
     name = args.name or f"CHANNEL {args.channel}"
-    arrange_media(media_root, args.programs.resolve(), args.ads.resolve(),
-                  args.channel, name)
+    pools = arrange_media(media_root, args.programs.resolve(), args.ads.resolve(),
+                          args.channel, name)
+
+    # A ceiling picks the richest pool at or below it. Asking for `family` on a library
+    # with only kids spots quietly gets kids rather than failing.
+    commercial_tag = COMMERCIAL_TAG
+    if pools:
+        wanted = RATING_LADDER.index(args.rating)
+        for rating in reversed(RATING_LADDER[: wanted + 1]):
+            if rating in pools:
+                commercial_tag = pools[rating]
+                break
+        print(f"  rating      ceiling {args.rating!r} -> pool {commercial_tag!r}")
 
     problems = check_layout(media_root)
     if problems:
@@ -158,6 +290,7 @@ def run(args: argparse.Namespace) -> int:
         name=name,
         increment=args.increment,
         break_duration=args.break_duration,
+        commercial_tag=commercial_tag,
     )
 
     conf_path = VENDOR / "confs" / f"{station}.json"
@@ -205,7 +338,7 @@ def run(args: argparse.Namespace) -> int:
 
     if not args.no_dedupe:
         from .adcatalog import install  # noqa: PLC0415 - after chdir and sys.path
-        install(media_root / COMMERCIAL_TAG, cooldown_minutes=args.cooldown)
+        install(media_root / commercial_tag, cooldown_minutes=args.cooldown)
         print(f"  dedupe      on, {args.cooldown} min cooldown across perceptual clusters")
 
     # Regenerating over an existing range silently doubles the schedule. Upstream writes with
@@ -243,6 +376,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="schedule block minutes; must exceed program length to leave ad room")
     ap.add_argument("--break-duration", type=int, default=120)
     ap.add_argument("--days", type=int, default=1)
+    ap.add_argument("--rating", choices=list(RATING_LADDER), default="late",
+                    help="ad ceiling for this channel; cumulative, so family includes kids")
     ap.add_argument("--cooldown", type=int, default=45,
                     help="minutes before a spot, or its twin, may air again")
     ap.add_argument("--no-dedupe", action="store_true",
