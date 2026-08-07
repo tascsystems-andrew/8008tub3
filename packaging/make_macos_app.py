@@ -30,52 +30,46 @@ exec "$PYTHON" -u -m tub3.app "$@" >>"$HOME/Library/Logs/8008TUB3.log" 2>&1
 ICON_SIZES = (16, 32, 64, 128, 256, 512)
 
 
-# Purple, ringed, and drifting downward. Reads three ways at once — a CRT phosphor ring, a
-# tuning dial, and the joke the project is named after — which is about as much as an icon
-# can be asked to do. Original artwork: the purple concentric look belongs to mpv's own logo,
-# and shipping that would misrepresent whose software this is.
-# Three rings, not five. A dock icon is often 32px, where five thin strokes collapse into
-# a purple smudge — fewer, thicker rings survive the shrink and read cleaner large.
-RING_COLOURS = (
-    (96, 38, 176),
-    (146, 64, 232),
-    (198, 116, 250),
-)
+# One open arc, one small dot. Minimal on purpose: an icon is read at 32px in a dock far
+# more often than it is admired at 512, and an open curve keeps its shape when a closed ring
+# would fill in. Reads as a tuning dial, a broadcast sweep, and — glancingly — the joke the
+# project is named for, without insisting on any of them.
+#
+# Gold dot rather than purple, so the icon and the on-screen menu share an accent colour.
+ARC = (150, 68, 236)
+ARC_SOFT = (96, 44, 158)
+DOT = (255, 200, 60)
 ICON_BG = (14, 12, 20, 255)
 
 
 def draw_icon(px: int):
-    """One icon at a given pixel size. Supersampled, because thin rings alias badly."""
+    """One icon at a given pixel size. Supersampled — thin arcs alias badly."""
     from PIL import Image, ImageDraw
 
-    ss = 4                      # supersample factor
+    ss = 4
     size = px * ss
     image = Image.new("RGBA", (size, size), ICON_BG)
     draw = ImageDraw.Draw(image)
 
-    centre_x = size / 2
-    outer_r = size * 0.375
-    # Each ring is smaller than the last and sits slightly lower, so the whole stack drifts
-    # toward the bottom rather than sharing one centre.
-    top_y = size * 0.415
-    drift = size * 0.155
+    cx, cy = size / 2, size * 0.475
+    r = size * 0.335
+    width = int(size * 0.088)
+    box = [cx - r, cy - r, cx + r, cy + r]
 
-    rings = len(RING_COLOURS)
-    for index, colour in enumerate(RING_COLOURS):
-        fraction = index / (rings - 1)
-        radius = outer_r * (1.0 - 0.255 * index)
-        centre_y = top_y + drift * fraction
-        width = max(1, int(size * (0.082 - 0.011 * index)))
-        draw.ellipse(
-            [centre_x - radius, centre_y - radius, centre_x + radius, centre_y + radius],
-            outline=colour + (255,), width=width,
-        )
+    # A softer, slightly lower arc underneath gives the shape weight at the bottom without
+    # adding a second full ring.
+    soft = size * 0.045
+    draw.arc([box[0], box[1] + soft, box[2], box[3] + soft],
+             start=25, end=155, fill=ARC_SOFT + (255,), width=int(width * 0.8))
 
-    # The centre, sitting at the bottom of the drift.
-    tip_r = outer_r * 0.235
-    tip_y = top_y + drift * 1.30
-    draw.ellipse([centre_x - tip_r, tip_y - tip_r, centre_x + tip_r, tip_y + tip_r],
-                 fill=(232, 158, 255, 255))
+    # The main arc leaves a gap at the top right. The break is what stops it reading as a
+    # plain circle at small sizes.
+    draw.arc(box, start=118, end=48, fill=ARC + (255,), width=width)
+
+    dot_r = size * 0.058
+    dot_y = cy + size * 0.028
+    draw.ellipse([cx - dot_r, dot_y - dot_r, cx + dot_r, dot_y + dot_r],
+                 fill=DOT + (255,))
 
     return image.resize((px, px), Image.LANCZOS)
 
