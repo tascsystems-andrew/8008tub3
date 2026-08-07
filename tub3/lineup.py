@@ -69,6 +69,19 @@ class Channel:
     # Movie channels want long blocks; a sitcom strip wants half-hours.
     increment: int | None = None
     break_duration: int = 120
+    # Where breaks go inside a programme.
+    #   "standard"  mid-rolls at chapter markers, falling back to proportional positions
+    #   "end"       between programmes only, never inside one
+    #   "center"    a single mid-point break
+    #
+    # "end" is the correct setting for anything cut without commercials in the first place.
+    # BBC material — Palin, Simon Reeve, Great British Railway Journeys, Long Way Down — has
+    # no act breaks anywhere in it, and neither does YouTube creator content. Timer-based
+    # insertion into either cuts mid-sentence, which is the single most immersion-breaking
+    # thing this system can do.
+    breaks: str = "standard"
+    # Some channels should carry no advertising at all.
+    commercial_free: bool = False
 
     @property
     def station(self) -> str:
@@ -97,6 +110,8 @@ def load(path: Path) -> list[Channel]:
             dayparts=dayparts,
             increment=raw.get("increment"),
             break_duration=int(raw.get("break_duration", 120)),
+            breaks=raw.get("breaks", "standard"),
+            commercial_free=bool(raw.get("commercial_free", False)),
         ))
     return sorted(channels, key=lambda c: c.number)
 
@@ -162,6 +177,9 @@ def compile_station(channel: Channel, media_root: Path, *, pools: dict[str, str]
             if rating in pools:
                 commercial_tag = pools[rating]
                 break
+    if channel.commercial_free:
+        commercial_tag = None
+
     conf = {
         "network_name": channel.name,
         "channel_number": channel.number,
@@ -169,7 +187,10 @@ def compile_station(channel: Channel, media_root: Path, *, pools: dict[str, str]
         "content_dir": str(media_root.resolve()),
         "bump_dir": BUMP_TAG,
         "commercial_free": commercial_tag is None,
-        "break_strategy": "standard",
+        # Chapter-derived break points are discarded by anything other than "standard", so a
+        # channel asking for "end" is explicitly saying its content has no act structure
+        # worth finding.
+        "break_strategy": channel.breaks,
         "break_duration": channel.break_duration,
         "schedule_increment": channel.increment or 30,
         "standby_image": "runtime/tub3_standby.png",
@@ -226,8 +247,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         print()
         for channel in channels:
-            print(f"  {channel.number:>3}  {channel.name:<24} {channel.rating:<7} "
-                  f"{channel.increment or 30}min")
+            breaks = "no mid-rolls" if channel.breaks == "end" else channel.breaks
+            ads = "ad-free" if channel.commercial_free else channel.rating
+            print(f"  {channel.number:>3}  {channel.name:<22} {ads:<8} "
+                  f"{channel.increment or 30:>3}min  {breaks}")
             for part in channel.dayparts:
                 print(f"       {part.start:02d}:00-{part.end:02d}:00  {part.tag}")
         print()
