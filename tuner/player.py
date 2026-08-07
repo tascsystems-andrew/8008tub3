@@ -61,6 +61,7 @@ class MpvPlayer:
         self._sock: socket.socket | None = None
         self._buffer = b""
         self._request_id = 0
+        self._fullscreen_applied = False
 
     # ---------- lifecycle ----------
 
@@ -103,11 +104,48 @@ class MpvPlayer:
                     sock.connect(self.socket_path)
                     sock.settimeout(0.05)
                     self._sock = sock
+                    self._assert_appliance_state()
                     return
                 except OSError:
                     pass
             time.sleep(0.02)
         raise MpvUnavailable(f"mpv IPC socket never appeared at {self.socket_path}")
+
+    def _assert_appliance_state(self) -> None:
+        """Force the state a television is always in, rather than trusting launch flags.
+
+        Escape hatches are bound unconditionally. Default key bindings are disabled so the
+        four-verb model owns the keyboard, but that leaves a fullscreen window with no way
+        out — fine on an appliance with a remote, a trap on a desktop.
+        """
+        for key in ("q", "Q", "Ctrl+c"):
+            self._command(["keybind", key, "quit"], wait=False)
+        for key in ("f", "F"):
+            self._command(["keybind", key, "cycle fullscreen"], wait=False)
+
+        if self.fullscreen:
+            self._nudge_fullscreen()
+
+    def _nudge_fullscreen(self) -> None:
+        """Re-assert fullscreen on a delay, off the hot path.
+
+        `--fullscreen=yes` is evaluated while mpv is still creating its window and is
+        silently dropped on macOS. Setting it at connect time is equally early. Tying it to
+        the first presented frame worked in isolation but raced in the real app, so it gets
+        its own thread with a couple of retries — it costs nothing and it is the difference
+        between an appliance and a window.
+        """
+        import threading
+
+        def run() -> None:
+            for delay in (0.6, 1.5, 3.0):
+                time.sleep(delay)
+                try:
+                    self._command(["set_property", "fullscreen", True], wait=False)
+                except Exception:  # noqa: BLE001 - the socket may be gone; never fatal
+                    return
+
+        threading.Thread(target=run, daemon=True).start()
 
     def close(self) -> None:
         try:
@@ -203,11 +241,24 @@ class MpvPlayer:
         if response is not None and response.get("error") not in (None, "success"):
             return TuneResult(False, 0.0, str(response.get("error")))
 
+        # A television is never paused. mpv can come up paused after a load-with-seek, and a
+        # box that boots into a frozen frame reads as broken rather than as "press play" —
+        # there is no play button on a remote with four buttons.
+        self._command(["set_property", "pause", False], wait=False)
+
         # playback-restart fires when frames actually start presenting.
         started = self._wait_for_event("playback-restart", timeout)
         latency_ms = (time.perf_counter() - start) * 1000.0
         if not started:
             return TuneResult(False, latency_ms, "no playback-restart event")
+
+        # Fullscreen only sticks once a window genuinely exists. Setting it at launch or at
+        # connect time is silently ignored on macOS, because mpv is still bringing the window
+        # up. The first presented frame is the earliest moment it can be trusted.
+        if self.fullscreen and not self._fullscreen_applied:
+            self._command(["set_property", "fullscreen", True], wait=False)
+            self._fullscreen_applied = True
+
         return TuneResult(True, latency_ms)
 
     def show_overlay(self, ass_text: str, overlay_id: int = 1) -> None:
