@@ -25,7 +25,7 @@ REPO="__REPO__"
 PYTHON="__PYTHON__"
 # Run the copy of mpv inside this bundle, so macOS attributes the video window to
 # 8008TUB3 rather than to mpv.
-export TUB3_MPV="$(cd "$(dirname "$0")" && pwd)/mpv"
+export TUB3_MPV="$(cd "$(dirname "$0")" && pwd)/8008TUB3.app/Contents/MacOS/mpv"
 cd "$REPO"
 exec "$PYTHON" -u -m tub3.app "$@" >>"$HOME/Library/Logs/8008TUB3.log" 2>&1
 """
@@ -116,18 +116,37 @@ def build(repo: Path, out_dir: Path, python: str) -> Path:
     )
     launcher.chmod(0o755)
 
-    # A symlink keeps the dylib search paths of the original install intact while
-    # putting the executable inside our bundle, which is what macOS looks at when
-    # deciding whose icon a window belongs to.
+    icon_ok = make_icon(resources / "tub3.icns", out_dir / ".iconbuild")
+    shutil.rmtree(out_dir / ".iconbuild", ignore_errors=True)
+
+    # mpv owns the video window, so macOS gives the dock tile to whatever bundle mpv runs
+    # from. A nested bundle fixes the NAME — macOS takes it from the bundle directory — but
+    # not the icon: mpv sets its dock icon programmatically at runtime, and nothing in an
+    # Info.plist overrides a runtime call. Short of patching and rebuilding mpv there is no
+    # fix, and it is moot on the Pi, which has no dock. Cosmetic, secondary platform, left.
     mpv_path = shutil.which("mpv")
     if mpv_path:
-        link = macos / "mpv"
+        player = macos / "8008TUB3.app" / "Contents"
+        (player / "MacOS").mkdir(parents=True, exist_ok=True)
+        link = player / "MacOS" / "mpv"
         if link.exists() or link.is_symlink():
             link.unlink()
         link.symlink_to(Path(mpv_path).resolve())
+        (player / "Resources").mkdir(parents=True, exist_ok=True)
+        player_info = {
+            "CFBundleName": "8008TUB3",
+            "CFBundleDisplayName": "8008TUB3",
+            "CFBundleIdentifier": "net.tub3.appliance.player",
+            "CFBundleExecutable": "mpv",
+            "CFBundlePackageType": "APPL",
+            "NSHighResolutionCapable": True,
+        }
+        icon_src = resources / "tub3.icns"
+        if icon_src.exists():
+            shutil.copy(icon_src, player / "Resources" / "tub3.icns")
+            player_info["CFBundleIconFile"] = "tub3.icns"
+        (player / "Info.plist").write_bytes(plistlib.dumps(player_info))
 
-    icon_ok = make_icon(resources / "tub3.icns", out_dir / ".iconbuild")
-    shutil.rmtree(out_dir / ".iconbuild", ignore_errors=True)
 
     info = {
         "CFBundleName": "8008TUB3",
