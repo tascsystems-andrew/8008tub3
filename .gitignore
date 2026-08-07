@@ -4,3 +4,4 @@ __pycache__/
 *.part.mkv
 adsplice-report.json
 vendor/
+.venv-build/
