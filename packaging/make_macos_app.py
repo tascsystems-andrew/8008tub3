@@ -25,7 +25,7 @@ REPO="__REPO__"
 PYTHON="__PYTHON__"
 # Run the copy of mpv inside this bundle, so macOS attributes the video window to
 # 8008TUB3 rather than to mpv.
-export TUB3_MPV="$(cd "$(dirname "$0")" && pwd)/8008TUB3.app/Contents/MacOS/mpv"
+export TUB3_MPV="$(cd "$(dirname "$0")" && pwd)/BoobTube.app/Contents/MacOS/mpv"
 cd "$REPO"
 exec "$PYTHON" -u -m tub3.app "$@" >>"$HOME/Library/Logs/8008TUB3.log" 2>&1
 """
@@ -101,7 +101,7 @@ def make_icon(dest: Path, tmp: Path) -> Path | None:
 
 
 def build(repo: Path, out_dir: Path, python: str) -> Path:
-    app = out_dir / "8008TUB3.app"
+    app = out_dir / "BoobTube.app"
     if app.exists():
         shutil.rmtree(app)
 
@@ -110,7 +110,7 @@ def build(repo: Path, out_dir: Path, python: str) -> Path:
     macos.mkdir(parents=True)
     resources.mkdir(parents=True)
 
-    launcher = macos / "8008TUB3"
+    launcher = macos / "BoobTube"
     launcher.write_text(
         LAUNCHER.replace("__REPO__", str(repo.resolve())).replace("__PYTHON__", python)
     )
@@ -120,18 +120,29 @@ def build(repo: Path, out_dir: Path, python: str) -> Path:
     shutil.rmtree(out_dir / ".iconbuild", ignore_errors=True)
 
     # mpv owns the video window, so macOS gives the dock tile to whatever bundle mpv runs
-    # from. A nested bundle fixes the NAME — macOS takes it from the bundle directory — but
-    # not the icon: mpv sets its dock icon programmatically at runtime, and nothing in an
-    # Info.plist overrides a runtime call. Short of patching and rebuilding mpv there is no
-    # fix, and it is moot on the Pi, which has no dock. Cosmetic, secondary platform, left.
+    # from. A nested bundle of ours fixes the NAME — macOS takes that from the bundle
+    # directory — but not the icon. Confirmed empirically: with mpv copied (not symlinked)
+    # inside this bundle, so Bundle.main resolves here, the label follows and the icon does
+    # not. mpv calls setApplicationIconImage at runtime and nothing in an Info.plist
+    # overrides a runtime call.
+    #
+    # The remaining options are patching and rebuilding mpv, which breaks on every upgrade,
+    # or embedding libmpv in our own window, which means linking and would relicense the
+    # project to GPL. Neither is worth a dock icon on the platform we do not deploy to — the
+    # Pi has no dock. Left as is, deliberately.
     mpv_path = shutil.which("mpv")
     if mpv_path:
-        player = macos / "8008TUB3.app" / "Contents"
+        player = macos / "BoobTube.app" / "Contents"
         (player / "MacOS").mkdir(parents=True, exist_ok=True)
-        link = player / "MacOS" / "mpv"
-        if link.exists() or link.is_symlink():
-            link.unlink()
-        link.symlink_to(Path(mpv_path).resolve())
+        # A real copy, not a symlink. macOS resolves Bundle.main through symlinks, so a
+        # linked binary reports its ORIGINAL location — /opt/homebrew/... — and mpv concludes
+        # it is not running from a bundle, falling back to its compiled-in icon. Copying
+        # keeps the resolved path inside our bundle. Homebrew links its dylibs by absolute
+        # path, so the copy still finds them.
+        target = player / "MacOS" / "mpv"
+        if target.exists() or target.is_symlink():
+            target.unlink()
+        shutil.copy2(Path(mpv_path).resolve(), target)
         (player / "Resources").mkdir(parents=True, exist_ok=True)
         player_info = {
             "CFBundleName": "BoobTube",
@@ -154,7 +165,7 @@ def build(repo: Path, out_dir: Path, python: str) -> Path:
         "CFBundleIdentifier": "net.tub3.appliance",
         "CFBundleVersion": "0.1",
         "CFBundleShortVersionString": "0.1",
-        "CFBundleExecutable": "8008TUB3",
+        "CFBundleExecutable": "BoobTube",
         "CFBundlePackageType": "APPL",
         "LSMinimumSystemVersion": "12.0",
         # It is a television. It should not sit in the dock switcher behaving like a document
