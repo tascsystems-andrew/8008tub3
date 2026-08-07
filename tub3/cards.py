@@ -22,12 +22,10 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-# NOTE: these are RGB. The ASS constants elsewhere are BGR, where the same three bytes mean
-# a different colour entirely — writing &H00D7FF& here as (0, 215, 255) yields cyan, not the
-# gold it produces on screen. Keeping the two conventions straight is worth the comment.
-GOLD = (255, 200, 60)          # the centre conductor, and the wordmark
-PURPLE = (168, 92, 246)        # the shell
-LILAC = (198, 170, 255)
+from brand import GOLD, LILAC, PURPLE
+
+# House colours come from brand.py. They are RGB here; the ASS constants used for on-screen
+# overlays are BGR, where the same three bytes mean a different colour entirely.
 DIM = (120, 110, 140)
 
 FONT_CANDIDATES = (

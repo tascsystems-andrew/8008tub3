@@ -35,6 +35,9 @@ class Verb(Enum):
     # Optional. Present on CEC remotes and keyboards, absent on clickers. Never required.
     DIGIT = "digit"
     POWER = "power"
+    VOLUME_UP = "volume_up"
+    VOLUME_DOWN = "volume_down"
+    MUTE = "mute"
 
 
 @dataclass(frozen=True)
@@ -48,21 +51,29 @@ class Event:
 # Generous on purpose: a clicker's "next" might be PAGEDOWN, RIGHT, DOWN or SPACE depending
 # on who made it, and asking the user to identify their clicker is a setup step we refuse.
 EVDEV_MAP: dict[int, Verb] = {
-    109: Verb.DOWN,    # PAGEDOWN  - clicker "next"
+    109: Verb.DOWN,    # PAGEDOWN  - clicker "next", the down arrow on most models
     108: Verb.DOWN,    # DOWN
     106: Verb.DOWN,    # RIGHT
     57:  Verb.DOWN,    # SPACE     - clicker "next" on some models
-    104: Verb.UP,      # PAGEUP    - clicker "previous"
+    104: Verb.UP,      # PAGEUP    - clicker "previous", the up arrow
     103: Verb.UP,      # UP
     105: Verb.UP,      # LEFT
-    28:  Verb.SELECT,  # ENTER
+    15:  Verb.SELECT,  # TAB       - the top button on pen-style clickers, and the easiest
+                       #             one to reach by feel. Worth having as SELECT.
+    28:  Verb.SELECT,  # ENTER     - same button, double-pressed, on those clickers
     96:  Verb.SELECT,  # KPENTER
-    63:  Verb.SELECT,  # F5        - clicker "start presentation"
-    48:  Verb.SELECT,  # B         - clicker "blank screen"
-    52:  Verb.SELECT,  # DOT       - clicker "blank screen" on some models
-    1:   Verb.BACK,    # ESC       - clicker "end presentation"
+    63:  Verb.SELECT,  # F5        - "full screen", long-press of the up arrow
+    1:   Verb.BACK,    # ESC       - "end presentation"
     14:  Verb.BACK,    # BACKSPACE
-    116: Verb.POWER,   # POWER
+    # "Blank screen", the long-press of the down arrow. Deliberately BACK rather than
+    # SELECT: a three-button clicker has no other way to produce a fourth verb, and without
+    # this such a remote cannot leave a submenu.
+    48:  Verb.BACK,    # B
+    52:  Verb.BACK,    # DOT
+    115: Verb.VOLUME_UP,
+    114: Verb.VOLUME_DOWN,
+    113: Verb.MUTE,
+    116: Verb.POWER,
 }
 
 EVDEV_DIGITS = {2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 7: 6, 8: 7, 9: 8, 10: 9, 11: 0}
@@ -77,6 +88,9 @@ CEC_MAP: dict[int, Verb] = {
     0x31: Verb.DOWN,     # CHANNEL DOWN
     0x40: Verb.POWER,
     0x6B: Verb.POWER,    # POWER OFF FUNCTION
+    0x41: Verb.VOLUME_UP,
+    0x42: Verb.VOLUME_DOWN,
+    0x43: Verb.MUTE,
 }
 
 CEC_DIGITS = {0x20 + n: n for n in range(10)}
@@ -224,8 +238,12 @@ class MpvKeyDriver(Driver):
         "DOWN": (Verb.DOWN, None), "RIGHT": (Verb.DOWN, None), "PGDWN": (Verb.DOWN, None),
         "SPACE": (Verb.DOWN, None),
         "ENTER": (Verb.SELECT, None), "KP_ENTER": (Verb.SELECT, None),
-        "b": (Verb.SELECT, None), ".": (Verb.SELECT, None), "F5": (Verb.SELECT, None),
+        "F5": (Verb.SELECT, None),
+        "b": (Verb.BACK, None), ".": (Verb.BACK, None),
         "ESC": (Verb.BACK, None), "BS": (Verb.BACK, None),
+        "TAB": (Verb.SELECT, None),
+        "VOLUME_UP": (Verb.VOLUME_UP, None), "VOLUME_DOWN": (Verb.VOLUME_DOWN, None),
+        "MUTE": (Verb.MUTE, None),
         **{str(n): (Verb.DIGIT, n) for n in range(10)},
     }
 

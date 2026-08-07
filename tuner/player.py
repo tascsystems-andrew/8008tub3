@@ -304,6 +304,16 @@ class MpvPlayer:
             return
         self._command(["osd-overlay", overlay_id, "none", ""], wait=False)
 
+    def nudge_volume(self, delta: int) -> None:
+        if not self.alive:
+            return
+        self._command(["add", "volume", delta], wait=False)
+
+    def toggle_mute(self) -> None:
+        if not self.alive:
+            return
+        self._command(["cycle", "mute"], wait=False)
+
     def get_property(self, name: str):
         try:
             response = self._command(["get_property", name])

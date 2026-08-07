@@ -134,7 +134,7 @@ def ad_inventory(commercials_dir: str) -> dict:
 
 PAGE = """<!doctype html>
 <meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
-<title>8008TUB3</title>
+<title>BoobTube</title>
 <style>
  :root{--bg:#111;--card:#1a1a1a;--line:#2c2c2c;--ink:#e8e8e8;--dim:#8a8a8a;--amber:#33ff55}
  *{box-sizing:border-box}
@@ -161,7 +161,7 @@ PAGE = """<!doctype html>
  .ok{color:var(--amber)}
 </style>
 <div class=wrap>
- <h1>8008TUB3</h1>
+ <h1>BoobTube</h1>
  <p class=sub id=sub>&nbsp;</p>
 
  <div class=card>

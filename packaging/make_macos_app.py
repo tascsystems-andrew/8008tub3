@@ -134,8 +134,8 @@ def build(repo: Path, out_dir: Path, python: str) -> Path:
         link.symlink_to(Path(mpv_path).resolve())
         (player / "Resources").mkdir(parents=True, exist_ok=True)
         player_info = {
-            "CFBundleName": "8008TUB3",
-            "CFBundleDisplayName": "8008TUB3",
+            "CFBundleName": "BoobTube",
+            "CFBundleDisplayName": "BoobTube",
             "CFBundleIdentifier": "net.tub3.appliance.player",
             "CFBundleExecutable": "mpv",
             "CFBundlePackageType": "APPL",
@@ -149,8 +149,8 @@ def build(repo: Path, out_dir: Path, python: str) -> Path:
 
 
     info = {
-        "CFBundleName": "8008TUB3",
-        "CFBundleDisplayName": "8008TUB3",
+        "CFBundleName": "BoobTube",
+        "CFBundleDisplayName": "BoobTube",
         "CFBundleIdentifier": "net.tub3.appliance",
         "CFBundleVersion": "0.1",
         "CFBundleShortVersionString": "0.1",
