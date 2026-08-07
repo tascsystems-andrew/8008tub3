@@ -22,11 +22,13 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-# Amber on near-black: what the era's idents, BIOS screens and cable boxes converged on, and
-# it survives being photographed off a TV better than white on grey.
-AMBER = (0, 215, 255)
-DARK = (16, 16, 16)
-DIM = (90, 90, 90)
+# NOTE: these are RGB. The ASS constants elsewhere are BGR, where the same three bytes mean
+# a different colour entirely — writing &H00D7FF& here as (0, 215, 255) yields cyan, not the
+# gold it produces on screen. Keeping the two conventions straight is worth the comment.
+GOLD = (255, 200, 60)          # the centre conductor, and the wordmark
+PURPLE = (168, 92, 246)        # the shell
+LILAC = (198, 170, 255)
+DIM = (120, 110, 140)
 
 FONT_CANDIDATES = (
     "/System/Library/Fonts/Supplemental/Arial Black.ttf",
@@ -56,32 +58,90 @@ def _centred(draw, text: str, font, y: int, width: int, fill) -> int:
     return bottom - top
 
 
+def draw_mark(draw, cx: float, cy: float, r: float, *, shell=None, pin=None) -> None:
+    """The coax mark — a C-shaped shell with a centre conductor, mouth at twelve o'clock.
+
+    Shared with the app icon so the ident and the icon are unmistakably the same logo. A
+    station that uses two different marks reads as two stations.
+    """
+    shell = shell or (168, 92, 246)
+    pin = pin or (255, 200, 60)
+    width = max(2, int(r * 0.30))
+    draw.arc([cx - r, cy - r, cx + r, cy + r], start=310, end=230,
+             fill=shell + (255,), width=width)
+    pin_r = r * 0.30
+    draw.ellipse([cx - pin_r, cy - pin_r, cx + pin_r, cy + pin_r], fill=pin + (255,))
+
+
+def _gradient(size: tuple[int, int], top, bottom):
+    """A vertical wash. Flat colour is what makes a card look like a terminal."""
+    from PIL import Image
+
+    width, height = size
+    ramp = Image.new("RGB", (1, height))
+    for y in range(height):
+        t = y / max(1, height - 1)
+        ramp.putpixel((0, y), tuple(int(top[i] + (bottom[i] - top[i]) * t) for i in range(3)))
+    return ramp.resize(size)
+
+
 def card(
     path: Path,
     *,
     heading: str,
     subheading: str = "",
     footer: str = "",
-    size: tuple[int, int] = (1280, 720),
+    size: tuple[int, int] = (1920, 1080),
 ) -> Path:
-    from PIL import Image, ImageDraw
+    """A network ident, not a status message.
+
+    The difference between this and a terminal splash is entirely in the trimmings: a wash
+    rather than flat black, a mark that matches the app, rules that give the type somewhere
+    to sit, and generous space. None of it is clever — it is the set of things every station
+    on air in 1994 had and a shell script does not.
+    """
+    from PIL import ImageDraw
 
     width, height = size
-    image = Image.new("RGB", size, DARK)
+    image = _gradient(size, (34, 18, 68), (9, 7, 14)).convert("RGB")
     draw = ImageDraw.Draw(image)
 
-    # A pair of rules above and below the text, which is the cheapest thing that reads as
-    # "broadcast ident" rather than "error message".
-    inset = int(width * 0.12)
-    draw.rectangle([inset, int(height * 0.30), width - inset, int(height * 0.30) + 4], fill=AMBER)
-    draw.rectangle([inset, int(height * 0.68), width - inset, int(height * 0.68) + 4], fill=AMBER)
+    band_h = int(height * 0.34)
+    band_y = int(height * 0.36)
+    draw.rectangle([0, band_y, width, band_y + band_h], fill=(22, 13, 44))
+    draw.rectangle([0, band_y - 3, width, band_y], fill=PURPLE)
+    draw.rectangle([0, band_y + band_h, width, band_y + band_h + 3], fill=PURPLE)
 
-    y = int(height * 0.36)
-    y += _centred(draw, heading, _font(int(height * 0.16)), y, width, AMBER) + int(height * 0.04)
+    mark_r = height * 0.090
+    mark_cx = width * 0.200
+    mark_cy = band_y + band_h / 2
+    draw_mark(draw, mark_cx, mark_cy, mark_r)
+
+    text_x = mark_cx + mark_r * 1.85
+
+    # Measure both lines and centre the pair on the band. Deriving the second line's position
+    # from the first one's bounding box is what previously let them overlap: a bbox top is
+    # not a line height, so tall glyphs ate the gap.
+    head_font = _font(int(height * 0.110))
+    sub_font = _font(int(height * 0.042))
+    hl, ht, hr, hb = draw.textbbox((0, 0), heading, font=head_font)
+    head_h = hb - ht
+    gap = height * 0.030
+    sub_h = 0
     if subheading:
-        _centred(draw, subheading, _font(int(height * 0.06)), y, width, AMBER)
+        sl, st_, sr, sb = draw.textbbox((0, 0), subheading, font=sub_font)
+        sub_h = sb - st_
+
+    total_h = head_h + (gap + sub_h if subheading else 0)
+    top_y = mark_cy - total_h / 2
+
+    draw.text((text_x, top_y - ht), heading, font=head_font, fill=GOLD)
+    if subheading:
+        draw.text((text_x + 3, top_y + head_h + gap - st_), subheading,
+                  font=sub_font, fill=LILAC)
+
     if footer:
-        _centred(draw, footer, _font(int(height * 0.035)), int(height * 0.85), width, DIM)
+        _centred(draw, footer, _font(int(height * 0.028)), int(height * 0.885), width, DIM)
 
     path.parent.mkdir(parents=True, exist_ok=True)
     image.save(path)
@@ -109,12 +169,21 @@ def card_clip(
         "anullsrc=sample_rate=48000:channel_layout=stereo"
     )
     dest.parent.mkdir(parents=True, exist_ok=True)
+    frames = int(round(seconds * 30000 / 1001))
+    # A slow push-in plus fades at both ends. Costs nothing and is most of the difference
+    # between a station ident and a screenshot of one.
+    vf = (
+        f"scale=2560:1440,zoompan=z='min(zoom+0.00045,1.10)':d={frames}"
+        f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1280x720:fps=30000/1001,"
+        f"fade=t=in:st=0:d=0.35,fade=t=out:st={max(0.0, seconds - 0.45):.2f}:d=0.45,"
+        "format=yuv420p"
+    )
     subprocess.run(
         ["ffmpeg", "-v", "error", "-y",
          "-loop", "1", "-framerate", "30000/1001", "-i", str(still),
          "-f", "lavfi", "-i", audio,
-         "-vf", "scale=1280:720,format=yuv420p",
-         "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-g", "60",
+         "-vf", vf,
+         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-g", "60",
          "-c:a", "aac", "-b:a", "128k",
          "-t", f"{seconds}", str(dest)],
         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True,
