@@ -239,6 +239,21 @@ def normalize_one(
         if audio_filter:
             cmd += ["-af", audio_filter]
 
+    # Put the seek index at the FRONT of the file.
+    #
+    # Muxers default to writing it at the end, and a player cannot present a single frame
+    # until it has read it — so opening any file means fetching data from the far end first.
+    # On local disk that is invisible. Measured over SMB across a Starlink link it was the
+    # difference between a fast open and a 7-second one: a 3.6MB index at the 98% mark took
+    # ~2.6s to read before decoding could even start.
+    #
+    # We control our own output, so there is no reason to inherit that. Costs a rewrite pass
+    # at encode time and nothing at all afterwards.
+    if dest.suffix.lower() == ".mkv":
+        cmd += ["-cues_to_front", "1"]
+    elif dest.suffix.lower() in (".mp4", ".m4v", ".mov"):
+        cmd += ["-movflags", "+faststart"]
+
     cmd.append(str(tmp))
 
     try:
