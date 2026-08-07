@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable
 
+from brand import DISPLAY_NAME
 from .input import Event, Verb
 
 WIDTH = 62
@@ -220,7 +221,7 @@ class Menu:
         events.append(rect(left, top + 78, right, top + 82, amber))
         events.append(rect(left, bottom - 74, right, bottom - 70, amber))
 
-        events.append(text(left + 32, top + 39, f"8008TUB3   {screen.title.upper()}",
+        events.append(text(left + 32, top + 39, f"{DISPLAY_NAME.upper()}   {screen.title.upper()}",
                            size=44, align=4, colour=ink, bold=1))
         events.append(text(right - 32, top + 39, f"v{self.version}",
                            size=32, align=6, colour=ink))

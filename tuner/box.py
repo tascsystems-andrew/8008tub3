@@ -152,6 +152,19 @@ class Box:
                 self._redraw()
                 return
 
+            # Volume: the side rockers on a clicker, and the TV remote over CEC. Not one of
+            # the four verbs — nothing depends on it — but a television without volume on the
+            # remote is a television people complain about.
+            if event.verb is Verb.VOLUME_UP:
+                self.player.nudge_volume(+5)
+                return
+            if event.verb is Verb.VOLUME_DOWN:
+                self.player.nudge_volume(-5)
+                return
+            if event.verb is Verb.MUTE:
+                self.player.toggle_mute()
+                return
+
             if event.verb is Verb.UP:
                 self.surf(-1)
             elif event.verb is Verb.DOWN:

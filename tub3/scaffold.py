@@ -64,7 +64,7 @@ FOLDERS: tuple[tuple[str, str, str], ...] = (
     ),
 )
 
-ROOT_README = """8008TUB3 - commercials
+ROOT_README = """BoobTube - commercials
 ======================
 
 Drop commercials in here. The folder a spot sits in decides which channels can air it.
