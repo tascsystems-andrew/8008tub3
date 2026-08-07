@@ -23,6 +23,9 @@ LAUNCHER = """#!/bin/bash
 set -e
 REPO="__REPO__"
 PYTHON="__PYTHON__"
+# Run the copy of mpv inside this bundle, so macOS attributes the video window to
+# 8008TUB3 rather than to mpv.
+export TUB3_MPV="$(cd "$(dirname "$0")" && pwd)/mpv"
 cd "$REPO"
 exec "$PYTHON" -u -m tub3.app "$@" >>"$HOME/Library/Logs/8008TUB3.log" 2>&1
 """
@@ -112,6 +115,16 @@ def build(repo: Path, out_dir: Path, python: str) -> Path:
         LAUNCHER.replace("__REPO__", str(repo.resolve())).replace("__PYTHON__", python)
     )
     launcher.chmod(0o755)
+
+    # A symlink keeps the dylib search paths of the original install intact while
+    # putting the executable inside our bundle, which is what macOS looks at when
+    # deciding whose icon a window belongs to.
+    mpv_path = shutil.which("mpv")
+    if mpv_path:
+        link = macos / "mpv"
+        if link.exists() or link.is_symlink():
+            link.unlink()
+        link.symlink_to(Path(mpv_path).resolve())
 
     icon_ok = make_icon(resources / "tub3.icns", out_dir / ".iconbuild")
     shutil.rmtree(out_dir / ".iconbuild", ignore_errors=True)
