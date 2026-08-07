@@ -30,20 +30,20 @@ exec "$PYTHON" -u -m tub3.app "$@" >>"$HOME/Library/Logs/8008TUB3.log" 2>&1
 ICON_SIZES = (16, 32, 64, 128, 256, 512)
 
 
-# One open arc, one small dot. Minimal on purpose: an icon is read at 32px in a dock far
-# more often than it is admired at 512, and an open curve keeps its shape when a closed ring
-# would fill in. Reads as a tuning dial, a broadcast sweep, and — glancingly — the joke the
-# project is named for, without insisting on any of them.
+# It is the schematic symbol for a coaxial connector: a C-shaped shell opening to one side
+# with a filled centre conductor inside it. Which is to say the joke was already sitting in
+# the KiCad standard library, drawn by people who were not making one.
 #
-# Gold dot rather than purple, so the icon and the on-screen menu share an accent colour.
-ARC = (150, 68, 236)
-ARC_SOFT = (96, 44, 158)
-DOT = (255, 200, 60)
+# Nothing here needs inventing — draw the symbol, give it the project's purple, and make the
+# centre pin gold so the icon shares an accent with the on-screen menu.
+SHELL = (150, 68, 236)
+SHELL_SOFT = (98, 44, 162)
+PIN = (255, 200, 60)
 ICON_BG = (14, 12, 20, 255)
 
 
 def draw_icon(px: int):
-    """One icon at a given pixel size. Supersampled — thin arcs alias badly."""
+    """One icon at a given pixel size. Supersampled — thick arcs still alias at the ends."""
     from PIL import Image, ImageDraw
 
     ss = 4
@@ -51,25 +51,23 @@ def draw_icon(px: int):
     image = Image.new("RGBA", (size, size), ICON_BG)
     draw = ImageDraw.Draw(image)
 
-    cx, cy = size / 2, size * 0.475
-    r = size * 0.335
-    width = int(size * 0.088)
-    box = [cx - r, cy - r, cx + r, cy + r]
+    # Sits low and slightly left, which is what tips the symbol over into the other reading.
+    cx, cy = size * 0.500, size * 0.505
+    r = size * 0.320
+    width = int(size * 0.105)
 
-    # A softer, slightly lower arc underneath gives the shape weight at the bottom without
-    # adding a second full ring.
-    soft = size * 0.045
-    draw.arc([box[0], box[1] + soft, box[2], box[3] + soft],
-             start=25, end=155, fill=ARC_SOFT + (255,), width=int(width * 0.8))
+    # A shadow of the shell, low, for weight.
+    draw.arc([cx - r, cy - r + size * 0.038, cx + r, cy + r + size * 0.038],
+             start=35, end=145, fill=SHELL_SOFT + (255,), width=int(width * 0.85))
 
-    # The main arc leaves a gap at the top right. The break is what stops it reading as a
-    # plain circle at small sizes.
-    draw.arc(box, start=118, end=48, fill=ARC + (255,), width=width)
+    # The shell, mouth at twelve o'clock. PIL sweeps clockwise from 0 at three o'clock, so
+    # starting just past the top and ending just before it puts the gap up there.
+    draw.arc([cx - r, cy - r, cx + r, cy + r],
+             start=310, end=230, fill=SHELL + (255,), width=width)
 
-    dot_r = size * 0.058
-    dot_y = cy + size * 0.028
-    draw.ellipse([cx - dot_r, dot_y - dot_r, cx + dot_r, dot_y + dot_r],
-                 fill=DOT + (255,))
+    # The centre conductor: solid, and the only warm thing in the mark.
+    pin_r = size * 0.098
+    draw.ellipse([cx - pin_r, cy - pin_r, cx + pin_r, cy + pin_r], fill=PIN + (255,))
 
     return image.resize((px, px), Image.LANCZOS)
 

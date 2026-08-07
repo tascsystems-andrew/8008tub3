@@ -180,7 +180,8 @@ class Menu:
     CANVAS = (1920, 1080)
     PANEL = (150, 120, 1770, 960)          # left, top, right, bottom
     ROW_HEIGHT = 62
-    AMBER = "&H00D7FF&"
+    # Phosphor green, not amber: green tubes were far more common on 90s CRTs.
+    AMBER = "&H55FF33&"
     INK = "&H101010&"
 
     def render_ass(self) -> str:
