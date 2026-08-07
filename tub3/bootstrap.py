@@ -203,9 +203,30 @@ def run(args: argparse.Namespace) -> int:
     for tag, count in sorted(counts.items()):
         print(f"                {tag:<24} {count:>4}")
 
+    if not args.no_dedupe:
+        from .adcatalog import install  # noqa: PLC0415 - after chdir and sys.path
+        install(media_root / COMMERCIAL_TAG, cooldown_minutes=args.cooldown)
+        print(f"  dedupe      on, {args.cooldown} min cooldown across perceptual clusters")
+
+    # Regenerating over an existing range silently doubles the schedule. Upstream writes with
+    # INSERT OR REPLACE, but the only unique constraint is the autoincrement id and every
+    # index is non-UNIQUE, so the conflict clause can never fire.
+    import sqlite3  # noqa: PLC0415
+    with sqlite3.connect("runtime/fs42_fluid.db") as conn:
+        removed = conn.execute(
+            "DELETE FROM liquid_blocks WHERE station = ?", (name,)
+        ).rowcount
+    if removed > 0:
+        print(f"  schedule    cleared {removed} existing block(s)")
+
     print(f"  schedule    generating {args.days} day(s)…")
     schedule = LiquidSchedule(station_conf)
     schedule.add_days(args.days)
+    catalog_used = getattr(schedule, "catalog", None)
+    if catalog_used is not None and hasattr(catalog_used, "repeats_prevented"):
+        relaxed = sum(catalog_used.relaxations.values())
+        print(f"                {catalog_used.repeats_prevented} at full cooldown, "
+              f"{relaxed} relaxed, {catalog_used.starved} unconstrained")
     print("  done")
     return 0
 
@@ -222,6 +243,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="schedule block minutes; must exceed program length to leave ad room")
     ap.add_argument("--break-duration", type=int, default=120)
     ap.add_argument("--days", type=int, default=1)
+    ap.add_argument("--cooldown", type=int, default=45,
+                    help="minutes before a spot, or its twin, may air again")
+    ap.add_argument("--no-dedupe", action="store_true",
+                    help="use upstream ad selection unmodified (for comparison)")
     args = ap.parse_args(argv)
     return run(args)
 
