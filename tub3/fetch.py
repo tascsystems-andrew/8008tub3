@@ -89,9 +89,78 @@ def _count(folder: Path) -> int:
     )
 
 
+def fetch_channel(
+    handle: str,
+    dest_root: Path,
+    *,
+    limit: int = 30,
+    newest_first: bool = True,
+    min_minutes: int = 4,
+    dry_run: bool = False,
+) -> int:
+    """Pull a creator's back catalogue into a folder of its own.
+
+    A folder per creator, because a folder IS a tag downstream — so each creator becomes
+    programming a channel can schedule, exactly like a series.
+
+    Three limits that matter, because a channel is not a video:
+
+    - **`--limit`.** A prolific creator has hundreds of videos at twenty-plus minutes each,
+      which is tens of gigabytes. Defaulting to unlimited would start a download nobody asked
+      for. Thirty videos is roughly ten hours, past the point where a channel stops looping
+      audibly.
+    - **A minimum duration.** Shorts and one-minute clips are not programming; they would be
+      scheduled as though they were episodes and leave the block full of filler.
+    - **The archive file.** Re-running the same handle fetches only what is new, so this is
+      safe to put on a timer later.
+    """
+    name = handle.lstrip("@").strip("/")
+    if "youtube.com" in name or "http" in name:
+        # Accept a full URL too, and recover the handle from it for the folder name.
+        name = name.rstrip("/").split("/")[-1].lstrip("@")
+    dest = dest_root / name
+    dest.mkdir(parents=True, exist_ok=True)
+
+    url = handle if handle.startswith("http") else f"https://www.youtube.com/@{name}/videos"
+
+    cmd = [
+        "yt-dlp",
+        "--format", FORMAT,
+        "--merge-output-format", "mp4",
+        "--restrict-filenames",
+        "--output", str(dest / OUTPUT_TEMPLATE),
+        "--download-archive", str(dest / ".tub3-fetched.txt"),
+        "--no-overwrites", "--continue", "--ignore-errors",
+        "--yes-playlist",
+        "--playlist-end", str(limit),
+        # Shorts are not episodes. Filtering here rather than after keeps them off the disk.
+        "--match-filter", f"duration >= {min_minutes * 60}",
+        "--progress",
+        url,
+    ]
+    if not newest_first:
+        cmd.insert(-1, "--playlist-reverse")
+
+    if dry_run:
+        print("  " + " ".join(cmd))
+        return 0
+
+    before = _count(dest)
+    subprocess.run(cmd)
+    after = _count(dest)
+    print(f"\n  {name}: {after - before} new, {after} total in {dest}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="tub3.fetch", description=__doc__)
-    ap.add_argument("urls", nargs="*", help="one or more URLs")
+    ap.add_argument("urls", nargs="*", help="one or more URLs, or @handles with --channels")
+    ap.add_argument("--channels", action="store_true",
+                    help="treat the arguments as creator handles and fetch their catalogues")
+    ap.add_argument("--limit", type=int, default=30,
+                    help="videos per creator (default 30, roughly ten hours)")
+    ap.add_argument("--min-minutes", type=int, default=4,
+                    help="skip anything shorter; shorts are not programming")
     ap.add_argument("--into", type=Path, required=True,
                     help="your commercials root (the folder holding Kids/Family/Late/Unsorted)")
     ap.add_argument("--rating", default="Unsorted",
@@ -114,6 +183,15 @@ def main(argv: list[str] | None = None) -> int:
     if not urls:
         print("error: no URLs given", file=sys.stderr)
         return 2
+
+    if args.channels:
+        # Creators land under the target directly, one folder each — they are programming,
+        # not commercials, so the rating tiers do not apply.
+        print(f"\n  {len(urls)} creator(s) -> {args.into}\n")
+        for handle in urls:
+            fetch_channel(handle, args.into, limit=args.limit,
+                          min_minutes=args.min_minutes, dry_run=args.dry_run)
+        return 0
 
     dest = args.into / args.rating
     print(f"\n  {len(urls)} URL(s) -> {dest}\n")
