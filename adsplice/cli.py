@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 from .detect import PROFILES
-from .ffmpeg import FFmpegMissing, require_tools
+from mediakit.ffmpeg import FFmpegMissing, require_tools
 from .pipeline import DEFAULT_CONFIDENCE_FLOOR, ingest
 
 

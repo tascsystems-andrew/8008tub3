@@ -22,7 +22,7 @@ from pathlib import Path
 
 from . import phash
 from .detect import Boundary, Profile, PROFILES, duration_prior, find_boundaries
-from .ffmpeg import MediaInfo, probe, run
+from mediakit.ffmpeg import MediaInfo, probe, run
 
 VIDEO_SUFFIXES = {".mp4", ".mkv", ".avi", ".mov", ".m4v", ".mpg", ".mpeg", ".ts", ".webm", ".wmv", ".vob"}
 

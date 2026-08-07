@@ -22,7 +22,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from .ffmpeg import MediaInfo, run
+from mediakit.ffmpeg import MediaInfo, run
 
 # Canonical broadcast spot lengths, with a prior weight for how common each actually is.
 #

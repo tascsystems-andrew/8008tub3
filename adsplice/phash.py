@@ -22,7 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from .ffmpeg import run_raw
+from mediakit.ffmpeg import run_raw
 
 # dhash grid: sample (W+1)xH luma pixels, compare horizontally adjacent ones.
 _W, _H = 8, 8
