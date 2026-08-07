@@ -175,19 +175,78 @@ class Menu:
     def render_text(self) -> str:
         return "\n".join(self._rows())
 
-    def render_ass(self) -> str:
-        """ASS markup for mpv's `osd-overlay`, drawn straight over live video.
+    # A fixed coordinate space for the overlay. mpv scales this to whatever the display
+    # actually is, so the menu is the same size on a 720p CRT and a 4K panel.
+    CANVAS = (1920, 1080)
+    PANEL = (150, 120, 1770, 960)          # left, top, right, bottom
+    ROW_HEIGHT = 62
+    AMBER = "&H00D7FF&"
+    INK = "&H101010&"
 
-        Monospace, hard drop shadow, amber on near-black — the colour scheme every BIOS and
-        every cable box menu of the era converged on, and it survives being photographed off
-        a TV better than white-on-grey.
+    def render_ass(self) -> str:
+        """ASS events for mpv's `osd-overlay`.
+
+        Built from vector shapes and independently positioned text rather than box-drawing
+        characters. The character approach only holds if the font renders U+2550 and friends
+        at exactly the ASCII advance width — most fonts do not, so the frame arrives in
+        pieces and every dot leader drifts. Positioning each label and value separately makes
+        the layout independent of font metrics entirely.
         """
-        header = (
-            r"{\an7\pos(60,60)\fnmonospace\fs28\bord0\shad2"
-            r"\1c&H00D7FF&\3c&H000000&\4c&H000000&\alpha&H00&}"
-        )
-        body = r"\N".join(row.replace("{", r"\{").replace("}", r"\}") for row in self._rows())
-        return header + body
+        left, top, right, bottom = self.PANEL
+        amber, ink = self.AMBER, self.INK
+        screen = self.screen
+        events: list[str] = []
+
+        def rect(x1: int, y1: int, x2: int, y2: int, colour: str, alpha: str = "&H00&") -> str:
+            return (
+                f"{{\\an7\\pos(0,0)\\bord0\\shad0\\1c{colour}\\1a{alpha}\\p1}}"
+                f"m {x1} {y1} l {x2} {y1} l {x2} {y2} l {x1} {y2}{{\\p0}}"
+            )
+
+        def text(x: int, y: int, body: str, *, size: int, align: int,
+                 colour: str = "", bold: int = 0) -> str:
+            colour = colour or amber
+            safe = body.replace("{", "(").replace("}", ")").replace("\\", "/")
+            return (
+                f"{{\\an{align}\\pos({x},{y})\\fnMonospace\\fs{size}"
+                f"\\b{bold}\\bord0\\shad3\\4c&H000000&\\1c{colour}}}{safe}"
+            )
+
+        # Panel, header band, and the two rules that read as "broadcast ident" rather than
+        # "dialog box".
+        events.append(rect(left, top, right, bottom, ink, "&H14&"))
+        events.append(rect(left, top, right, top + 78, amber, "&HCC&"))
+        events.append(rect(left, top + 78, right, top + 82, amber))
+        events.append(rect(left, bottom - 74, right, bottom - 70, amber))
+
+        events.append(text(left + 32, top + 39, f"8008TUB3   {screen.title.upper()}",
+                           size=44, align=4, colour=ink, bold=1))
+        events.append(text(right - 32, top + 39, f"v{self.version}",
+                           size=32, align=6, colour=ink))
+
+        y = top + 150
+        for index, item in enumerate(screen.items):
+            selected = index == screen.cursor and item.selectable
+            if selected:
+                events.append(rect(left + 18, y - 26, right - 18, y + 26, amber, "&HD8&"))
+            colour = ink if selected else amber
+            marker = "▶ " if selected else "   "
+            events.append(text(left + 40, y, f"{marker}{item.label}",
+                               size=38, align=4, colour=colour, bold=1 if selected else 0))
+            value = "›" if item.kind is ItemKind.SUBMENU else (item.value or "")
+            if value:
+                events.append(text(right - 40, y, value, size=38, align=6, colour=colour))
+            y += self.ROW_HEIGHT
+
+        status = self.status or (screen.current.help if screen.current else "")
+        if status:
+            events.append(text(left + 40, bottom - 108, status[:74], size=28, align=4))
+
+        events.append(text(left + 40, bottom - 36,
+                           "▲▼ MOVE      ● SELECT      ◀ BACK",
+                           size=30, align=4))
+
+        return "\n".join(events)
 
 
 def build_root(state: dict) -> Screen:

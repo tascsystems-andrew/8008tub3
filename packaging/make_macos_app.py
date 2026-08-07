@@ -30,10 +30,60 @@ exec "$PYTHON" -u -m tub3.app "$@" >>"$HOME/Library/Logs/8008TUB3.log" 2>&1
 ICON_SIZES = (16, 32, 64, 128, 256, 512)
 
 
+# Purple, ringed, and drifting downward. Reads three ways at once — a CRT phosphor ring, a
+# tuning dial, and the joke the project is named after — which is about as much as an icon
+# can be asked to do. Original artwork: the purple concentric look belongs to mpv's own logo,
+# and shipping that would misrepresent whose software this is.
+# Three rings, not five. A dock icon is often 32px, where five thin strokes collapse into
+# a purple smudge — fewer, thicker rings survive the shrink and read cleaner large.
+RING_COLOURS = (
+    (96, 38, 176),
+    (146, 64, 232),
+    (198, 116, 250),
+)
+ICON_BG = (14, 12, 20, 255)
+
+
+def draw_icon(px: int):
+    """One icon at a given pixel size. Supersampled, because thin rings alias badly."""
+    from PIL import Image, ImageDraw
+
+    ss = 4                      # supersample factor
+    size = px * ss
+    image = Image.new("RGBA", (size, size), ICON_BG)
+    draw = ImageDraw.Draw(image)
+
+    centre_x = size / 2
+    outer_r = size * 0.375
+    # Each ring is smaller than the last and sits slightly lower, so the whole stack drifts
+    # toward the bottom rather than sharing one centre.
+    top_y = size * 0.415
+    drift = size * 0.155
+
+    rings = len(RING_COLOURS)
+    for index, colour in enumerate(RING_COLOURS):
+        fraction = index / (rings - 1)
+        radius = outer_r * (1.0 - 0.255 * index)
+        centre_y = top_y + drift * fraction
+        width = max(1, int(size * (0.082 - 0.011 * index)))
+        draw.ellipse(
+            [centre_x - radius, centre_y - radius, centre_x + radius, centre_y + radius],
+            outline=colour + (255,), width=width,
+        )
+
+    # The centre, sitting at the bottom of the drift.
+    tip_r = outer_r * 0.235
+    tip_y = top_y + drift * 1.30
+    draw.ellipse([centre_x - tip_r, tip_y - tip_r, centre_x + tip_r, tip_y + tip_r],
+                 fill=(232, 158, 255, 255))
+
+    return image.resize((px, px), Image.LANCZOS)
+
+
 def make_icon(dest: Path, tmp: Path) -> Path | None:
-    """Draw an icon rather than shipping one: fewer files, and it matches the menu."""
+    """Draw the icon rather than shipping one: fewer files, and it is ours."""
     try:
-        from PIL import Image, ImageDraw
+        import PIL  # noqa: F401
     except ImportError:
         return None
 
@@ -43,28 +93,8 @@ def make_icon(dest: Path, tmp: Path) -> Path | None:
     for size in ICON_SIZES:
         for scale in (1, 2):
             px = size * scale
-            image = Image.new("RGBA", (px, px), (16, 16, 16, 255))
-            draw = ImageDraw.Draw(image)
-            # A CRT: rounded screen, amber scanline, chunky bezel.
-            pad = px * 0.13
-            draw.rounded_rectangle([pad, pad, px - pad, px - pad * 1.25],
-                                   radius=px * 0.10, fill=(28, 28, 28, 255),
-                                   outline=(0, 215, 255, 255), width=max(1, px // 28))
-            inner = px * 0.24
-            draw.rounded_rectangle([inner, inner, px - inner, px - inner * 1.35],
-                                   radius=px * 0.05, fill=(0, 215, 255, 40))
-            band = px * 0.055
-            mid = px * 0.47
-            draw.rectangle([inner * 1.15, mid - band / 2, px - inner * 1.15, mid + band / 2],
-                           fill=(0, 215, 255, 255))
-            # Two little rabbit-ear antennae, because of course.
-            draw.line([px * 0.42, pad, px * 0.30, px * 0.03], fill=(0, 215, 255, 255),
-                      width=max(1, px // 32))
-            draw.line([px * 0.58, pad, px * 0.70, px * 0.03], fill=(0, 215, 255, 255),
-                      width=max(1, px // 32))
-
             suffix = f"{size}x{size}" + ("@2x" if scale == 2 else "")
-            image.save(iconset / f"icon_{suffix}.png")
+            draw_icon(px).save(iconset / f"icon_{suffix}.png")
 
     icns = tmp / "tub3.icns"
     result = subprocess.run(["iconutil", "-c", "icns", str(iconset), "-o", str(icns)],
