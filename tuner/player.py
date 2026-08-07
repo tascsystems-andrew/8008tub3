@@ -50,6 +50,7 @@ class MpvPlayer:
         video_output: str | None = None,
         fullscreen: bool = True,
         extra_args: list[str] | None = None,
+        mpv_binary: str | None = None,
     ):
         self.socket_path = socket_path or os.path.join(
             tempfile.gettempdir(), f"tub3-mpv-{os.getpid()}.sock"
@@ -57,6 +58,11 @@ class MpvPlayer:
         self.video_output = video_output
         self.fullscreen = fullscreen
         self.extra_args = extra_args or []
+        # macOS attributes a window's dock icon to the bundle containing the running
+        # binary. Launching Homebrew's mpv means the dock shows mpv's identity, not
+        # ours — so the app bundle ships a link to mpv inside its own MacOS folder
+        # and points here at that path instead.
+        self.mpv_binary = mpv_binary or os.environ.get("TUB3_MPV") or "mpv"
         self.proc: subprocess.Popen | None = None
         self._sock: socket.socket | None = None
         self._buffer = b""
@@ -69,14 +75,14 @@ class MpvPlayer:
     def start(self, timeout: float = 10.0) -> None:
         import shutil
 
-        if shutil.which("mpv") is None:
-            raise MpvUnavailable("mpv not found on PATH")
+        if not os.path.exists(self.mpv_binary) and shutil.which(self.mpv_binary) is None:
+            raise MpvUnavailable(f"mpv not found ({self.mpv_binary})")
 
         if os.path.exists(self.socket_path):
             os.unlink(self.socket_path)
 
         args = [
-            "mpv",
+            self.mpv_binary,
             "--idle=yes",
             "--force-window=yes",
             "--keep-open=no",
