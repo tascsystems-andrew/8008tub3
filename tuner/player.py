@@ -261,10 +261,17 @@ class MpvPlayer:
 
         return TuneResult(True, latency_ms)
 
+    # The coordinate space overlay ASS is authored in. Passing 0,0 here lets mpv choose,
+    # which means the same menu renders at wildly different sizes depending on the display —
+    # enormous on a retina panel, unreadable on a CRT. Declaring the space explicitly makes
+    # mpv scale it to fit, so the menu occupies the same fraction of the screen everywhere.
+    OVERLAY_RES = (1920, 1080)
+
     def show_overlay(self, ass_text: str, overlay_id: int = 1) -> None:
+        width, height = self.OVERLAY_RES
         self._command([
             "osd-overlay", overlay_id, "ass-events", ass_text,
-            0, 0, 0, "no",
+            width, height, 0, "no",
         ], wait=False)
 
     def hide_overlay(self, overlay_id: int = 1) -> None:
