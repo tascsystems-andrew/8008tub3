@@ -3,19 +3,22 @@
 The thing that makes this feel like television rather than IPTV: **channels are timetables,
 not streams.** Nothing is decoded, transcoded or buffered until somebody tunes in. Thirty
 channels cost nothing while nobody is watching them, and tuning is a local file open plus a
-seek — measured at ~25ms, against a 1000ms budget.
+seek.
 
 The clock always knows what *should* be on air. Tuning just asks it, then punches in at the
-right offset. That is exactly how a real cable box behaved: the broadcast was always
+right offset — measured end to end through mpv at 17ms median and 50ms worst, against a
+1000ms budget. That is exactly how a real cable box behaved: the broadcast was always
 happening, you simply joined it mid-flight.
 
 Two channel kinds:
 
 - **Loop** — a playlist that repeats forever from a fixed epoch. What is airing is pure
   arithmetic on the current time, so there is nothing to store and nothing to regenerate.
-  A channel that has run for a year needs no more state than one switched on this morning.
-- **Timetable** — explicit airings with real start times, for dayparted channels where
-  cartoons must actually be on at 07:00.
+  Crucially it *cannot expire*, which makes it the right fallback when a real schedule runs
+  out — but it can never carry ad breaks, because FieldStation42's loop blocks emit
+  back-to-back content with no reel blocks at all. Fallback only, never the main event.
+- **Liquid** — reads FieldStation42's generated schedule, which is a timetable that already
+  has the commercial pods resolved into it. Added in the FS42 integration; see INTEGRATION.md.
 
 Both answer one question, which is the only question the tuner ever asks:
 "what is on channel N right now, and how far into it are we?"
@@ -111,40 +114,6 @@ class LoopChannel(Channel):
             return None
         index = self.programs.index(current.program)
         return self.programs[(index + 1) % len(self.programs)]
-
-
-@dataclass
-class Slot:
-    start: float           # wall-clock epoch seconds
-    program: Program
-
-
-class TimetableChannel(Channel):
-    """Explicit airings, for dayparted channels where 07:00 really must be cartoons."""
-
-    def __init__(self, number: int, name: str, slots: list[Slot]):
-        super().__init__(number, name)
-        self.slots = sorted(slots, key=lambda s: s.start)
-        self._starts = [s.start for s in self.slots]
-
-    def now(self, at: float) -> Airing | None:
-        if not self.slots:
-            return None
-        index = bisect.bisect_right(self._starts, at) - 1
-        if index < 0:
-            return None
-        slot = self.slots[index]
-        offset = at - slot.start
-        if offset >= slot.program.duration:
-            return None  # dead air; the caller shows a sign-off card
-        return Airing(
-            channel=self.number,
-            channel_name=self.name,
-            program=slot.program,
-            offset=offset,
-            started_at=slot.start,
-            ends_at=slot.start + slot.program.duration,
-        )
 
 
 @dataclass

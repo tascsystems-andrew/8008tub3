@@ -1,0 +1,9 @@
+
+  ----------------------------------------------
+  tunes           12 ok, 0 failed
+  median               33 ms
+  p90                  51 ms
+  worst                51 ms
+  budget 1000ms   PASS (p90)
+  target  500ms   PASS (p90)
+
