@@ -202,6 +202,102 @@ class StdinDriver(Driver):
             termios.tcsetattr(fd, termios.TCSADRAIN, saved)
 
 
+class MpvKeyDriver(Driver):
+    """Keys captured by the mpv window itself, delivered over IPC.
+
+    The most portable driver, and on a desktop the only one that works: evdev is Linux-only
+    and needs device permissions, while mpv already owns the focused window on every
+    platform. It also handles presentation clickers for free, because a clicker *is* a
+    keyboard — PageUp/PageDown arrive here like any other key.
+
+    Uses its own connection to the same IPC socket rather than sharing the player's. mpv
+    accepts multiple simultaneous IPC clients, which avoids two threads racing on one socket
+    and keeps tuning latency unaffected by input handling.
+    """
+
+    name = "mpv-keys"
+
+    # mpv key name -> verb. Deliberately generous, same reasoning as the evdev map: no
+    # per-device setup, no "which remote do you have" question.
+    BINDINGS: dict[str, tuple[Verb, int | None]] = {
+        "UP": (Verb.UP, None), "LEFT": (Verb.UP, None), "PGUP": (Verb.UP, None),
+        "DOWN": (Verb.DOWN, None), "RIGHT": (Verb.DOWN, None), "PGDWN": (Verb.DOWN, None),
+        "SPACE": (Verb.DOWN, None),
+        "ENTER": (Verb.SELECT, None), "KP_ENTER": (Verb.SELECT, None),
+        "b": (Verb.SELECT, None), ".": (Verb.SELECT, None), "F5": (Verb.SELECT, None),
+        "ESC": (Verb.BACK, None), "BS": (Verb.BACK, None),
+        **{str(n): (Verb.DIGIT, n) for n in range(10)},
+    }
+
+    MESSAGE = "tub3"
+
+    def __init__(self, socket_path: str):
+        self.socket_path = socket_path
+        self._sock = None
+
+    def _connect(self, timeout: float = 10.0):
+        import socket as _socket
+        import time as _time
+
+        deadline = _time.monotonic() + timeout
+        while _time.monotonic() < deadline:
+            try:
+                sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+                sock.connect(self.socket_path)
+                return sock
+            except OSError:
+                _time.sleep(0.05)
+        raise RuntimeError(f"could not connect to mpv IPC at {self.socket_path}")
+
+    def events(self) -> Iterator[Event]:
+        import json as _json
+
+        self._sock = self._connect()
+        # Register every binding. `keybind` makes mpv emit a client-message we can read,
+        # which keeps key handling in one place rather than split across an input.conf.
+        for key, (verb, digit) in self.BINDINGS.items():
+            payload = f"{self.MESSAGE} {verb.value} {digit if digit is not None else ''}".strip()
+            self._sock.sendall(
+                (_json.dumps({"command": ["keybind", key, f"script-message {payload}"]}) + "\n").encode()
+            )
+
+        buffer = b""
+        while True:
+            try:
+                chunk = self._sock.recv(65536)
+            except OSError:
+                break
+            if not chunk:
+                break
+            buffer += chunk
+            while b"\n" in buffer:
+                line, _, buffer = buffer.partition(b"\n")
+                if not line.strip():
+                    continue
+                try:
+                    message = _json.loads(line)
+                except ValueError:
+                    continue
+                if message.get("event") != "client-message":
+                    continue
+                args = message.get("args") or []
+                if len(args) < 2 or args[0] != self.MESSAGE:
+                    continue
+                try:
+                    verb = Verb(args[1])
+                except ValueError:
+                    continue
+                digit = int(args[2]) if len(args) > 2 and str(args[2]).isdigit() else None
+                yield Event(verb, digit=digit, source=self.name)
+
+    def close(self) -> None:
+        if self._sock:
+            try:
+                self._sock.close()
+            except OSError:
+                pass
+
+
 class CecDriver(Driver):
     """HDMI-CEC, so the TV's own remote drives the box.
 
