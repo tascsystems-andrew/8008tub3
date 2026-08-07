@@ -14,6 +14,7 @@ import argparse
 import json
 import sqlite3
 import sys
+import threading
 from pathlib import Path
 
 from tuner.box import Box
@@ -57,6 +58,64 @@ def discover_channels(db: Path) -> list[tuple[int, str]]:
     return sorted(found)
 
 
+def local_ip() -> str:
+    """The address to type into a browser.
+
+    Opening a UDP socket toward a public address picks the interface the OS would actually
+    route through, without sending a packet. `gethostbyname(gethostname())` is the obvious
+    alternative and is wrong on any box with more than one interface — it happily returns
+    127.0.0.1, which is exactly the address that does not help someone holding a phone.
+    """
+    import socket
+
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(("192.0.2.1", 1))   # TEST-NET-1: reserved, never routed
+        return probe.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+    finally:
+        probe.close()
+
+
+def menu_state(db: Path, web_port: int) -> dict:
+    """What the on-screen menu shows. Facts, not settings — this screen cannot type."""
+    address = local_ip()
+    state = {
+        "net": "Connected" if address != "127.0.0.1" else "No network",
+        "addr": f"{address}:{web_port}",
+        "version": "0.1",
+        "remote": "keys + clicker",
+    }
+
+    settings_path = Path(__file__).resolve().parent.parent / "settings.json"
+    ads_dir = ""
+    if settings_path.exists():
+        try:
+            ads_dir = json.loads(settings_path.read_text()).get("commercials_dir", "")
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    if ads_dir and Path(ads_dir).exists():
+        from .bootstrap import VIDEO_SUFFIXES
+        spots = sum(
+            1 for p in Path(ads_dir).rglob("*")
+            if p.is_file() and p.suffix.lower() in VIDEO_SUFFIXES and not p.name.startswith(".")
+        )
+        state["ads"] = f"{spots:,} spots"
+    else:
+        state["ads"] = "none yet"
+
+    if db.exists():
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            count = conn.execute("SELECT COUNT(*) FROM liquid_blocks").fetchone()[0]
+            state["library"] = f"{count:,} blocks scheduled"
+        finally:
+            conn.close()
+    return state
+
+
 def build_drivers(player: MpvPlayer, *, headless: bool) -> list[Driver]:
     """Every input that might exist, all live at once.
 
@@ -89,6 +148,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--headless", action="store_true",
                     help="Linux appliance mode: also read input devices directly")
     ap.add_argument("--vo", default=None, help="mpv video output driver")
+    ap.add_argument("--web-port", type=int, default=8008,
+                    help="port shown on screen for the settings page")
+    ap.add_argument("--no-web", action="store_true",
+                    help="do not start the settings server")
     args = ap.parse_args(argv)
 
     channels = discover_channels(args.db)
@@ -114,11 +177,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
+    if not args.no_web:
+        from .web import serve  # noqa: PLC0415
+        threading.Thread(target=serve, args=("0.0.0.0", args.web_port),
+                         daemon=True).start()
+        print(f"  settings: http://{local_ip()}:{args.web_port}")
+
     drivers = build_drivers(player, headless=args.headless)
     print(f"  input: {', '.join(d.name for d in drivers)}")
     print("\n  UP/DOWN change channel · ENTER opens the menu · ESC closes it · Q quits\n")
 
-    box = Box(lineup, player, start_channel=args.channel or channels[0][0])
+    box = Box(lineup, player, start_channel=args.channel or channels[0][0],
+              state=menu_state(args.db, args.web_port))
     try:
         box.run(drivers)
     except KeyboardInterrupt:

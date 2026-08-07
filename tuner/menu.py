@@ -221,13 +221,16 @@ def build_root(state: dict) -> Screen:
              action=lambda: "Schedule rebuilding in the background",
              help="Use after adding new shows"),
     ]
+    address = state.get("addr", "")
     network = [
+        # The address is the single most useful thing this screen can show: it is how you get
+        # from the sofa to the settings page. It goes first, and it is the real routed
+        # address rather than a hostname that may or may not resolve.
+        Item("Open in a browser", ItemKind.INFO, f"http://{address}" if address else "no network",
+             help="Everything needing typing happens there, not here"),
         Item("Status", ItemKind.INFO, state.get("net", "Connected")),
-        Item("Address", ItemKind.INFO, state.get("addr", "8008tub3.local")),
-        Item("Library", ItemKind.INFO, state.get("library", "tank/media  ✓")),
-        Item("Commercials", ItemKind.INFO, state.get("ads", "1,284 spots")),
-        Item("Set up in a browser", ItemKind.INFO, "→ 8008tub3.local",
-             help="Anything needing a password is done there, not here"),
+        Item("Library", ItemKind.INFO, state.get("library", "nothing scheduled")),
+        Item("Commercials", ItemKind.INFO, state.get("ads", "none yet")),
     ]
     about = [
         Item("Version", ItemKind.INFO, state.get("version", "0.1")),
