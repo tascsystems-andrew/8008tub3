@@ -20,6 +20,10 @@ _IDET_RE = re.compile(
 )
 _CROP_RE = re.compile(r"crop=(\d+):(\d+):(\d+):(\d+)")
 
+# Minimum fraction of a dimension a trim must remove before it counts as a real bar
+# rather than a dark edge. A genuine letterbox removes 10-25%.
+MIN_CROP_FRACTION = 0.04
+
 
 @dataclass(frozen=True)
 class InterlaceVerdict:
@@ -137,6 +141,17 @@ def detect_crop(info: MediaInfo, samples: int = 5) -> CropVerdict:
     # Refuse to crop away more than a third of either dimension. Anything that aggressive is
     # a detection failure, not a letterbox, and cropping it would destroy the picture.
     if best_w < info.width * 0.66 or best_h < info.height * 0.66:
+        return CropVerdict(info.width, info.height, 0, 0, info.width, info.height)
+
+    # Ignore trivial trims. Analog captures and VHS rips almost always have a slightly dark
+    # edge or a few dead pixels, and cropdetect duly reports 640x480 -> 640x476. Four pixels
+    # is not a letterbox — but acting on it forces a full re-encode of a file that could
+    # otherwise have been stream-copied, which is both slower and lossy. Only a trim large
+    # enough to be a real bar is worth that price: a genuine letterbox removes 10-25% of the
+    # height, an order of magnitude more than this threshold.
+    trimmed_w = (info.width - best_w) / info.width if info.width else 0.0
+    trimmed_h = (info.height - best_h) / info.height if info.height else 0.0
+    if trimmed_w < MIN_CROP_FRACTION and trimmed_h < MIN_CROP_FRACTION:
         return CropVerdict(info.width, info.height, 0, 0, info.width, info.height)
 
     return CropVerdict(best_w, best_h, best_x, best_y, info.width, info.height)

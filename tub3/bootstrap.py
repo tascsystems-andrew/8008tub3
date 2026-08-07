@@ -243,6 +243,59 @@ def build_config(
     return {"station_conf": conf}
 
 
+# Block lengths a television schedule actually uses, in minutes.
+STANDARD_BLOCKS = (10, 15, 30, 60, 90, 120)
+
+# Real 90s broadcast ran roughly 22 minutes of content in a 30-minute slot, so content is
+# about three-quarters of a block. Sizing a block much larger than the programme means the
+# scheduler fills the difference with commercials — and it does so by cutting the programme
+# into ever smaller pieces, which is how a 450s show in a 1800s block becomes twelve
+# 37-second fragments separated by ad pods.
+CONTENT_SHARE = 0.75
+
+
+def choose_increment(programs: Path) -> tuple[int, float, int]:
+    """Pick the schedule block length from how long the programmes actually are.
+
+    Returns (minutes, median program seconds, program count). This is deliberately derived
+    rather than configured: getting it wrong does not fail, it quietly produces a channel
+    that is three-quarters advertising, and no non-technical user is going to work out that
+    the fix is a block-length setting.
+    """
+    from mediakit.ffmpeg import probe  # noqa: PLC0415
+
+    durations = []
+    for path in sorted(programs.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in VIDEO_SUFFIXES:
+            continue
+        if path.name.startswith("."):
+            continue
+        try:
+            info = probe(path)
+        except Exception:  # noqa: BLE001
+            continue
+        if info.duration > 0:
+            durations.append(info.duration)
+
+    if not durations:
+        return 30, 0.0, 0
+
+    durations.sort()
+    median = durations[len(durations) // 2]
+
+    # Pick the block whose resulting ad load lands closest to real broadcast, rather than the
+    # first block over a threshold. A threshold is brittle at the boundary — a 450.05s
+    # programme misses a 600s cutoff by a twentieth of a second and jumps to the next block
+    # up, doubling the advertising. Scoring the outcome directly cannot do that.
+    candidates = [m for m in STANDARD_BLOCKS if m * 60 >= median]
+    if not candidates:
+        return STANDARD_BLOCKS[-1], median, len(durations)
+
+    target_ad_share = 1.0 - CONTENT_SHARE
+    best = min(candidates, key=lambda m: abs((1.0 - median / (m * 60)) - target_ad_share))
+    return best, median, len(durations)
+
+
 def check_layout(media_root: Path) -> list[str]:
     problems = []
     for char in "[]?*":
@@ -283,12 +336,19 @@ def run(args: argparse.Namespace) -> int:
             print(f"  ! {problem}", file=sys.stderr)
         return 1
 
+    increment = args.increment
+    if increment is None:
+        increment, median, count = choose_increment(args.programs.resolve())
+        ad_share = 100 * (1 - median / (increment * 60)) if increment else 0
+        print(f"  blocks      {increment} min, derived from {count} programme(s) "
+              f"(median {median/60:.1f} min) -> about {ad_share:.0f}% ads")
+
     station = f"tub3_ch{args.channel}"
     conf = build_config(
         media_root=media_root,
         channel=args.channel,
         name=name,
-        increment=args.increment,
+        increment=increment,
         break_duration=args.break_duration,
         commercial_tag=commercial_tag,
     )
@@ -372,8 +432,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="where the FS42 content tree is assembled (symlinks, not copies)")
     ap.add_argument("--channel", type=int, default=3)
     ap.add_argument("--name", type=str, default=None)
-    ap.add_argument("--increment", type=int, default=10,
-                    help="schedule block minutes; must exceed program length to leave ad room")
+    ap.add_argument("--increment", type=int, default=None,
+                    help="schedule block minutes; derived from programme length if omitted")
     ap.add_argument("--break-duration", type=int, default=120)
     ap.add_argument("--days", type=int, default=1)
     ap.add_argument("--rating", choices=list(RATING_LADDER), default="late",
