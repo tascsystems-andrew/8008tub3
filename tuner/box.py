@@ -57,7 +57,7 @@ def render_bug(airing: Airing) -> str:
     ]
     header = (
         r"{\an1\pos(70,1010)\fnmonospace\fs30\bord0\shad3"
-        r"\1c&H00D7FF&\4c&H000000&}"
+        r"\1c&H55FF33&\4c&H000000&}"
     )
     return header + r"\N".join(lines)
 
@@ -92,7 +92,7 @@ class Box:
             self.channel = channel
             self.bug = BugState()
             self.player.show_overlay(
-                r"{\an5\pos(960,540)\fnmonospace\fs42\1c&H00D7FF&}"
+                r"{\an5\pos(960,540)\fnmonospace\fs42\1c&H55FF33&}"
                 f"CHANNEL {channel}\\NOFF AIR", overlay_id=2,
             )
             return
@@ -179,6 +179,11 @@ class Box:
         try:
             while self.running:
                 time.sleep(0.25)
+                if not self.player.alive:
+                    # mpv exited — usually because the viewer quit. Ending the loop here is
+                    # the difference between a clean shutdown and a broken-pipe traceback.
+                    self.running = False
+                    break
                 with self._lock:
                     if self._pending_digits and time.monotonic() > self._digit_deadline:
                         self._commit_digits()

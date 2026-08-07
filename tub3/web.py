@@ -32,6 +32,7 @@ SETTINGS = Path(__file__).resolve().parent.parent / "settings.json"
 DEFAULTS = {
     "ad_load": 3,          # 1..5; 3 is broadcast-realistic
     "cooldown_minutes": 45,
+    "fullscreen": False,
     "programs_dir": "",
     "commercials_dir": "",
 }
@@ -135,7 +136,7 @@ PAGE = """<!doctype html>
 <meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
 <title>8008TUB3</title>
 <style>
- :root{--bg:#111;--card:#1a1a1a;--line:#2c2c2c;--ink:#e8e8e8;--dim:#8a8a8a;--amber:#00d7ff}
+ :root{--bg:#111;--card:#1a1a1a;--line:#2c2c2c;--ink:#e8e8e8;--dim:#8a8a8a;--amber:#33ff55}
  *{box-sizing:border-box}
  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,system-ui,sans-serif}
  .wrap{max-width:760px;margin:0 auto;padding:32px 20px 64px}
@@ -150,7 +151,7 @@ PAGE = """<!doctype html>
  .row{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
  .val{color:var(--amber);font-weight:600}
  .hint{font-size:12.5px;color:var(--dim);margin-top:6px}
- button{background:var(--amber);color:#06232b;border:0;border-radius:6px;padding:10px 16px;
+ button{background:var(--amber);color:#06210f;border:0;border-radius:6px;padding:10px 16px;
    font-weight:650;font-size:13.5px;cursor:pointer}
  button.ghost{background:transparent;color:var(--amber);border:1px solid var(--line)}
  .ch{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--line);font-size:14px}
@@ -205,6 +206,7 @@ async function refresh(){
 
   $('#sub').textContent = `${s.channels.length} channel(s) · ${s.settings.cooldown_minutes} min ad cooldown`;
   $('#adload').value = s.settings.ad_load;
+  $('#fullscreen').checked = !!s.settings.fullscreen;
   $('#programs').value = s.settings.programs_dir||'';
   $('#commercials').value = s.settings.commercials_dir||'';
   paintLoad();
@@ -222,7 +224,7 @@ function paintLoad(){
 $('#adload').addEventListener('input',paintLoad);
 $('#save').onclick=async()=>{
   await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({ad_load:+$('#adload').value,programs_dir:$('#programs').value,
+    body:JSON.stringify({ad_load:+$('#adload').value,fullscreen:$('#fullscreen').checked,programs_dir:$('#programs').value,
       commercials_dir:$('#commercials').value})});
   $('#saved').textContent='Saved. Rebuild to apply to the schedule.';
   refresh();

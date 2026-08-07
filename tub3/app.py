@@ -144,7 +144,10 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="tub3", description=__doc__)
     ap.add_argument("--db", type=Path, default=DB)
     ap.add_argument("--channel", type=int, default=None, help="start on this channel")
-    ap.add_argument("--windowed", action="store_true", help="do not go fullscreen")
+    ap.add_argument("--fullscreen", action="store_true",
+                    help="take over the whole screen (default: windowed)")
+    ap.add_argument("--windowed", action="store_true",
+                    help="force windowed even if the setting says otherwise")
     ap.add_argument("--headless", action="store_true",
                     help="Linux appliance mode: also read input devices directly")
     ap.add_argument("--vo", default=None, help="mpv video output driver")
@@ -170,7 +173,16 @@ def main(argv: list[str] | None = None) -> int:
     for number, name in channels:
         print(f"    {number:>3}  {name}")
 
-    player = MpvPlayer(fullscreen=not args.windowed, video_output=args.vo)
+    # Windowed by default. An appliance wants the whole screen; a laptop you are also
+    # working on does not, and a program that seizes the display on launch is a
+    # program you stop opening. The Pi image ships with this turned on.
+    from .web import load_settings  # noqa: PLC0415
+    wants_fullscreen = bool(load_settings().get('fullscreen', False))
+    if args.fullscreen:
+        wants_fullscreen = True
+    if args.windowed:
+        wants_fullscreen = False
+    player = MpvPlayer(fullscreen=wants_fullscreen, video_output=args.vo)
     try:
         player.start()
     except MpvUnavailable as exc:
@@ -179,8 +191,18 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.no_web:
         from .web import serve  # noqa: PLC0415
-        threading.Thread(target=serve, args=("0.0.0.0", args.web_port),
-                         daemon=True).start()
+
+        def _serve() -> None:
+            # A settings page that cannot bind is an inconvenience. A television that
+            # will not start because a settings page could not bind is a fault. The
+            # commonest cause is a previous instance still holding the port, which is
+            # exactly when you least want the box to refuse to come up.
+            try:
+                serve("0.0.0.0", args.web_port)
+            except OSError as exc:
+                print(f"  settings server unavailable: {exc}")
+
+        threading.Thread(target=_serve, daemon=True).start()
         print(f"  settings: http://{local_ip()}:{args.web_port}")
 
     drivers = build_drivers(player, headless=args.headless)

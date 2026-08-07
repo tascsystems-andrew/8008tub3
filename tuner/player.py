@@ -62,6 +62,7 @@ class MpvPlayer:
         self._buffer = b""
         self._request_id = 0
         self._fullscreen_applied = False
+        self.alive = True
 
     # ---------- lifecycle ----------
 
@@ -84,6 +85,13 @@ class MpvPlayer:
             "--no-input-default-bindings",
             "--cache=yes",
             "--demuxer-max-bytes=64MiB",
+            # A television does not change size when the programme does. mpv resizes its
+            # window to each new file by default, so a 640x480 commercial inside a 720p show
+            # makes the window jump on every ad break. Both flags are needed: one sets the
+            # size once, the other stops it being reconsidered.
+            "--auto-window-resize=no",
+            "--autofit=1280x720",
+            "--keepaspect-window=no",
             f"--input-ipc-server={self.socket_path}",
         ]
         if self.fullscreen:
@@ -152,7 +160,8 @@ class MpvPlayer:
             if self._sock:
                 self._command(["quit"], wait=False)
                 self._sock.close()
-        except OSError:
+        except (OSError, MpvUnavailable):
+            # Shutting down a player that has already gone is the normal path, not an error.
             pass
         if self.proc:
             try:
@@ -168,9 +177,15 @@ class MpvPlayer:
     # ---------- IPC ----------
 
     def _send(self, payload: dict) -> None:
-        if not self._sock:
+        if not self._sock or not self.alive:
             raise MpvUnavailable("not connected")
-        self._sock.sendall((json.dumps(payload) + "\n").encode())
+        try:
+            self._sock.sendall((json.dumps(payload) + "\n").encode())
+        except OSError as exc:
+            # mpv has gone. That is a normal way for this to end — the viewer pressed quit —
+            # so it must unwind cleanly rather than surfacing a broken pipe traceback.
+            self.alive = False
+            raise MpvUnavailable("mpv exited") from exc
 
     def _read_messages(self, timeout: float) -> list[dict]:
         """Drain whatever mpv has sent, up to `timeout`."""
@@ -225,6 +240,8 @@ class MpvPlayer:
 
     def tune(self, path: Path, offset: float, *, timeout: float = 8.0) -> TuneResult:
         """Punch into a file at `offset`. Returns time to actual picture."""
+        if not self.alive:
+            return TuneResult(False, 0.0, "mpv exited")
         self._read_messages(0.0)  # discard anything stale before we start timing
         start = time.perf_counter()
 
@@ -268,6 +285,8 @@ class MpvPlayer:
     OVERLAY_RES = (1920, 1080)
 
     def show_overlay(self, ass_text: str, overlay_id: int = 1) -> None:
+        if not self.alive:
+            return
         width, height = self.OVERLAY_RES
         self._command([
             "osd-overlay", overlay_id, "ass-events", ass_text,
@@ -275,8 +294,13 @@ class MpvPlayer:
         ], wait=False)
 
     def hide_overlay(self, overlay_id: int = 1) -> None:
+        if not self.alive:
+            return
         self._command(["osd-overlay", overlay_id, "none", ""], wait=False)
 
     def get_property(self, name: str):
-        response = self._command(["get_property", name])
+        try:
+            response = self._command(["get_property", name])
+        except MpvUnavailable:
+            return None
         return response.get("data") if response else None
