@@ -416,50 +416,70 @@ def _has_video(folder: Path) -> bool:
 
 
 def build_bumps(media_root: Path, channel: Channel, bumpers: Path | None) -> int:
-    """Fill this channel's bump pool: its own clips first, generated cards as the fallback.
+    """Fill this channel's bump pool, on the right side of the break.
 
-    Upstream splits a bump directory by two literal subfolder names, `pre` and `post`, with
-    no config behind it. Channel idents go in `pre` — the classic placement is coming *out*
-    of a break and back into the programme, which is where a bumper does its actual job of
-    telling you what you are watching and on what.
+    Upstream splits a bump directory by two literal subfolder names with no config behind
+    them, and `ReelBlock(start_bump, comms, end_bump)` is built from `pre` and `post` in that
+    order (`fs42/catalog.py:652`). So `pre` plays going *into* the advertising and `post`
+    plays coming back out of it, which decides what belongs where:
 
-    Supplied clips are matched by filename prefix (`ch04-`), and anything named `extra-brb-`
-    is shared by every channel, since "we'll be right back" says nothing channel-specific.
+        pre   "we'll be right back"  — the last thing before the ads
+        post  the station ident      — the first thing as the programme resumes
 
-    The generated placeholder cards are only made when a channel has no clips of its own.
-    Mixing them means a real bumper competes with a card reading CHANNEL 4 in a system font,
-    and the card wins a third of the time.
+    That is the placement a bumper is for. Telling someone what channel they are on as the
+    show returns is useful; telling them as it leaves is talking to an empty room.
+
+    Supplied clips are matched by filename prefix — `ch04-` for a channel's own, `extra-brb-`
+    for the shared one, since "we'll be right back" says nothing channel-specific.
+
+    Anything with no supplied clip falls back to a generated card. These are not placeholders
+    to be embarrassed about: `cards.card` draws the same violet wash, mark and rules as the
+    boot splash, and `card_clip` gives it a slow push-in and fades at both ends. What the
+    fallback must *not* do is dilute — a generated card sitting in the same pool as a real
+    ident wins its share of the draws, so cards are only made for a slot that is otherwise
+    empty.
     """
-    from .cards import make_station_ids
+    from .cards import card_clip
 
     pool = media_root / channel.bump_tag
-    pre = pool / "pre"
+    pre, post = pool / "pre", pool / "post"
     if pool.exists():
         for stale in pool.rglob("*"):
             if stale.is_symlink():
                 stale.unlink()
     pre.mkdir(parents=True, exist_ok=True)
+    post.mkdir(parents=True, exist_ok=True)
 
-    linked = 0
-    if bumpers and bumpers.exists():
-        prefixes = (f"ch{channel.number:02d}-", "extra-brb-")
+    def take(prefix: str, into: Path) -> int:
+        if not (bumpers and bumpers.exists()):
+            return 0
+        found = 0
         for clip in sorted(bumpers.iterdir()):
             if clip.suffix.lower() not in VIDEO_SUFFIXES:
                 continue
-            if not clip.name.lower().startswith(prefixes):
+            if not clip.name.lower().startswith(prefix):
                 continue
-            link = pre / clip.name
+            link = into / clip.name
             if not link.exists():
                 try:
                     link.symlink_to(clip.resolve())
                 except OSError:
                     continue
-            linked += 1
+            found += 1
+        return found
 
-    if linked == 0:
-        made = make_station_ids(pool, channel.number, channel.name)
-        return sum(made.values())
-    return linked
+    idents = take(f"ch{channel.number:02d}-", post)
+    brbs = take("extra-brb-", pre)
+
+    if idents == 0:
+        card_clip(post / "ident_0.mkv", heading=f"CHANNEL {channel.number}",
+                  subheading=channel.name, seconds=4.0)
+        idents = 1
+    if brbs == 0:
+        card_clip(pre / "brb_0.mkv", heading="WE'LL BE", subheading="RIGHT BACK", seconds=4.0)
+        brbs = 1
+
+    return idents + brbs
 
 
 def _link_pool(media_root: Path, tag: str, folders: list[str],
