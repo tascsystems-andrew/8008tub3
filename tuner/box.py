@@ -177,9 +177,14 @@ class Box:
         station = self.lineup.get(channel)
         self.player.hide_overlay(overlay_id=2)
         self.player.hide_overlay(overlay_id=3)
+        # A picture first, always. The listings are an overlay, so without something behind
+        # them the screen keeps showing whatever channel you came from — and a guide with no
+        # music must still look like a guide, not like a failed channel change.
         music = list(getattr(station, "music", []) or [])
         if music:
             self.player.play_loop(music, backdrop=True)
+        else:
+            self.player.show_backdrop()
         self.channel = channel
         self.bug = BugState()
         self._guide = Guide(guide_channel=channel,

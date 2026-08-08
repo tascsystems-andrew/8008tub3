@@ -419,6 +419,36 @@ class MpvPlayer:
         latency_ms = (time.perf_counter() - start) * 1000.0
         return TuneResult(started, latency_ms, None if started else "no playback-restart")
 
+    def show_backdrop(self, *, timeout: float = 8.0) -> TuneResult:
+        """A picture with nothing in it, so an overlay has somewhere to live.
+
+        The music path gets its surface from `lavfi-complex` layered over the audio. With no
+        music there is no file at all, and mpv sitting idle presents nothing — so the guide
+        would draw its listings into a void and the screen would keep showing whatever
+        channel you came from.
+
+        `av://lavfi:` plays a filter graph as though it were a file, so the colour source
+        becomes the thing being played rather than something layered onto it. Infinite by
+        nature, which is why it loops on `loop-file` rather than `loop-playlist`.
+        """
+        if not self.alive:
+            return TuneResult(False, 0.0, "mpv exited")
+        start = time.perf_counter()
+        self._command(["set_property", "force-window", "yes"], wait=False)
+        self._command(["set_property", "keep-open", "no"], wait=False)
+        self._command(["set_property", "loop-file", "inf"], wait=False)
+        response = self._command(
+            ["loadfile", "av://lavfi:color=c=0x0E0C14:s=1920x1080:r=12", "replace"],
+            timeout=timeout,
+        )
+        if response is not None and response.get("error") not in (None, "success"):
+            return TuneResult(False, 0.0, str(response.get("error")))
+        self._backdrop = True
+        self._command(["set_property", "pause", False], wait=False)
+        started = self._wait_for_event("playback-restart", timeout)
+        return TuneResult(started, (time.perf_counter() - start) * 1000.0,
+                          None if started else "no playback-restart")
+
     def clear_loop(self) -> None:
         """Undo `play_loop`, so a scheduled channel does not inherit its looping or backdrop.
 
@@ -431,6 +461,7 @@ class MpvPlayer:
         self._command(["set_property", "loop-playlist", "no"], wait=False)
         if self._backdrop:
             self._command(["set_property", "lavfi-complex", ""], wait=False)
+            self._command(["set_property", "loop-file", "no"], wait=False)
             self._backdrop = False
 
     # The coordinate space overlay ASS is authored in. Passing 0,0 here lets mpv choose,
