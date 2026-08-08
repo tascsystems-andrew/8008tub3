@@ -112,6 +112,7 @@ class Box:
         self._guide_rows: list = []
         self._guide_rows_at = 0.0
         self._guide_ass = None
+        self._looping = False
 
     # How long a set of listings rows stays good for. Rebuilding them queries every channel's
     # schedule across ninety minutes; the scroll is redrawn far more often than this, because
@@ -129,14 +130,26 @@ class Box:
         a moment ago, and saying so every time a programme starts is the box talking to
         itself. Nothing in the schedule is a channel change.
         """
-        if getattr(self.lineup.get(channel), "is_guide", False):
+        station = self.lineup.get(channel)
+        if getattr(station, "is_guide", False):
             self._tune_guide(channel, announce=announce)
             return
+        if getattr(station, "is_ambiance", False):
+            self._tune_ambiance(channel, announce=announce)
+            return
 
-        # Leaving the guide: undo its looping playlist, or the next channel inherits it and
-        # repeats one programme forever.
-        if self._guide is not None:
+        # Leaving any looping channel: undo it, or the next channel inherits `loop-playlist`
+        # and repeats one programme forever instead of advancing.
+        #
+        # Tracked as a flag rather than inferred from `self._guide`. That worked while the
+        # guide was the only looping channel and silently stopped working the moment ambiance
+        # arrived — leaving channel 13 for a scheduled one left the loop set, and the failure
+        # would show up as a programme that never ends, a long way from the code that caused
+        # it.
+        if self._looping:
             self.player.clear_loop()
+            self._looping = False
+        if self._guide is not None:
             self.player.hide_overlay(overlay_id=4)
             self._guide = None
             self._guide_ass = None
@@ -167,6 +180,40 @@ class Box:
         self.bug = BugState(airing=airing, shown_at=shown_at)
         self._redraw()
 
+    def _tune_ambiance(self, channel: int, *, announce: bool = True) -> None:
+        """Put the loop up. No schedule, no catalogue, no backdrop — the video is the picture.
+
+        The bug is kept, unlike the guide. This looks like an ordinary channel, so someone
+        landing on it should be told where they are in the ordinary way.
+        """
+        station = self.lineup.get(channel)
+        # Leaving the guide behind, if that is where we came from.
+        if self._guide is not None:
+            self.player.hide_overlay(overlay_id=4)
+            self._guide = None
+            self._guide_ass = None
+        self.player.clear_loop()
+
+        clips = list(getattr(station, "clips", []) or [])
+        airing = self.lineup.now(channel, time.time())
+        if not clips:
+            # Configured but empty — say so rather than showing black and looking broken.
+            self.channel = channel
+            self.bug = BugState()
+            self.player.show_overlay(
+                r"{\an5\pos(960,540)\fnmonospace\fs42\1c&H55FF33&}"
+                f"CHANNEL {channel}\\NNOTHING LOADED", overlay_id=2,
+            )
+            return
+
+        self.player.hide_overlay(overlay_id=2)
+        self.player.play_loop(clips)
+        self._looping = True
+        self.channel = channel
+        shown_at = time.monotonic() if announce else self.bug.shown_at
+        self.bug = BugState(airing=airing, shown_at=shown_at)
+        self._redraw()
+
     def _tune_guide(self, channel: int, *, announce: bool = True) -> None:
         """Put the listings up, with music under them.
 
@@ -187,6 +234,7 @@ class Box:
             self.player.play_loop(music, backdrop=True)
         else:
             self.player.show_backdrop()
+        self._looping = True
         self.channel = channel
         self.bug = BugState()
         self._guide = Guide(guide_channel=channel,

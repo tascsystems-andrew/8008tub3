@@ -216,6 +216,44 @@ class GuideChannel(Channel):
         )
 
 
+class AmbianceChannel(Channel):
+    """A fire, a fish tank, a train window. One thing, looping, never off air.
+
+    Same shape as `GuideChannel` and for the same reason: there is no timetable to express, so
+    there is nothing to schedule, catalogue or top up. `Box` asks the channel what it is and
+    hands mpv a looping playlist.
+
+    Unlike the guide it needs no synthetic backdrop — the content is video, so the picture is
+    its own surface — and it keeps the ordinary channel bug, because it *is* an ordinary
+    channel to look at and someone arriving on it should be told where they are.
+    """
+
+    is_ambiance = True
+
+    def __init__(self, number: int, name: str, folder: Path | None = None):
+        super().__init__(number, name)
+        self.folder = Path(folder) if folder else None
+
+    @property
+    def clips(self) -> list[Path]:
+        """Resolved at tune time, so the month rolls over without restarting the box."""
+        from .ambiance import clips_for
+        return clips_for(self.folder)
+
+    def now(self, at: float) -> Airing:
+        clips = self.clips
+        title = clips[0].stem.replace("_", " ").replace(".", " ") if clips else self.name
+        return Airing(
+            channel=self.number,
+            channel_name=self.name,
+            program=Program(clips[0] if clips else Path(""), 0.0, title[:44]),
+            offset=0.0,
+            started_at=at,
+            ends_at=at + 3600.0,
+            off_air=not clips,
+        )
+
+
 class LoopChannel(Channel):
     """A playlist repeating forever from a fixed epoch.
 

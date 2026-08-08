@@ -54,6 +54,13 @@ from .bootstrap import (
 GUIDE_CHANNEL = 2
 UNUSED_CHANNEL = 1
 
+# The ambiance loop sits above the scheduled dial rather than inside it. Anything at or below
+# 12 is a station someone tuned to for a programme; 13 is the one you land on deliberately and
+# leave running. Declared here with the others so the numbers that are spoken for all live in
+# one place — the lineup is proposed by a model, and "13 is taken" is exactly the kind of
+# thing that gets forgotten while the interesting question is which sitcoms belong at dinner.
+AMBIANCE_CHANNEL = 13
+
 # The hours a child might plausibly be watching alone, on a channel rated for them. Inside
 # this window a kids/family channel may carry only content rated for children.
 #
