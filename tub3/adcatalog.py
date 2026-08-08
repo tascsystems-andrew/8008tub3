@@ -66,34 +66,63 @@ class Tub3Catalog(ShowCatalog):
         self.repeats_prevented = 0
         self.starved = 0
         self.relaxations: dict[float, int] = {}
+        self._last_bump: datetime.datetime | None = None
+        self.bumps_aired = 0
+        self.bumps_suppressed = 0
         super().__init__(config, *args, **kwargs)
 
     # ---------- the one override ----------
 
     def make_reel_block(self, when, bumpers=True, *args, **kwargs):
-        """Break pods without a station ident wrapped round them.
+        """A station ident at most once per block, instead of around every break.
 
-        Upstream puts a bumper on each end of every break. Over a day that is 320 airings of
-        the same four generated cards — the channel announcing itself every eight minutes to
-        someone who has not moved. Real stations did ident around breaks, but they had
-        hundreds of them and did not use the same four on a loop.
+        Upstream puts a bumper on each end of every break. Over a day that is 320 airings —
+        the channel announcing itself every eight minutes to someone who has not moved.
 
-        The channel identification belongs on the *change*, which is where the tuner already
-        puts it: `BugState` shows channel, name and what is on for four seconds after a tune,
-        fades on its own, and comes back on a BACK press. That is the moment someone actually
-        wants to know what they are watching.
+        This used to switch them off entirely on ad-supported channels, which was right when
+        the bump pool held four generated cards reading CHANNEL 4 in a system font. It stopped
+        being right the moment the channels got actual identities: Sludge, Miss Birdie, the
+        Director-General and his monocle are the personality of the dial, and a personality
+        nobody ever sees is just a file on a disk. The complaint was never "show me no
+        bumpers", it was that the same placeholder appeared between every commercial roll.
+
+        So the rule is frequency, not absence: one ident per `schedule_increment` of airtime.
+        That number is already the channel's own sense of how long a programme block is, so it
+        tunes itself — a half-hour sitcom strip idents about once a show, a two-hour film
+        channel idents about once a film, and neither needed a second setting to say so.
 
         `bumpers=False` is upstream's own parameter — `make_reel_block` skips both `find_bump`
         calls and returns `ReelBlock(None, reels, None)`. No fork, and no risk of the empty
         `bump_dir` trap, because the bump content still exists and is still catalogued.
 
-        Left on for commercial-free channels: with no advertising to fill a break, upstream
-        fills it from the bump pool instead, so switching bumpers off there would leave it
+        Commercial-free channels are always allowed one: with no advertising to fill a break,
+        upstream fills it from the bump pool instead, so suppressing them there would leave it
         with nothing to schedule at all.
         """
         if self.config.get("commercial_free"):
             return super().make_reel_block(when, bumpers, *args, **kwargs)
-        return super().make_reel_block(when, False, *args, **kwargs)
+
+        allow = bool(bumpers) and self._bump_is_due(when)
+        if allow:
+            self._last_bump = when
+            self.bumps_aired += 1
+        elif bumpers:
+            self.bumps_suppressed += 1
+        return super().make_reel_block(when, allow, *args, **kwargs)
+
+    def _bump_is_due(self, when) -> bool:
+        """Has a block's worth of airtime passed since the last ident?
+
+        `when` is whatever upstream hands the reel builder. It is a datetime in every path
+        this project uses, but the guard costs nothing and the alternative is a TypeError
+        deep inside a forty-minute build.
+        """
+        if not isinstance(when, datetime.datetime):
+            return True
+        if self._last_bump is None:
+            return True
+        gap = datetime.timedelta(minutes=self.config.get("schedule_increment", 30) or 30)
+        return abs(when - self._last_bump) >= gap
 
     def find_commercial(self, seconds, when, commercial_dir):
         tag = commercial_dir if commercial_dir else self.config.get("commercial_dir")
