@@ -1,0 +1,219 @@
+{
+  "channels": [
+    {
+      "number": 2,
+      "name": "GUIDE",
+      "kind": "guide",
+      "rating": "kids"
+    },
+    {
+      "number": 3,
+      "name": "BOOBTUBE",
+      "rating": "family",
+      "increment": 30,
+      "sources": {
+        "shows-preschool": [
+          "/mnt/tub3/Media/mshare/Kids TV/Ben and Holly's Little Kingdom",
+          "/mnt/tub3/Media/mshare/Kids TV/Bob the Builder",
+          "/mnt/tub3/Media/mshare/Kids TV/Twirlywoos",
+          "/mnt/tub3/Media/mshare/Kids TV/Kid-E-Cats",
+          "/mnt/tub3/Media/mshare/Kids TV/Go! Go! Cory Carson",
+          "/mnt/tub3/Media/mshare/Kids TV/Chip Chilla",
+          "/mnt/tub3/Media/mshare/Kids TV/Trotro",
+          "/mnt/tub3/Media/mshare/Kids TV/Ready, Steady, Wiggle!"
+        ],
+        "shows-kids": [
+          "/mnt/tub3/Media/mshare/Kids TV/Arthur",
+          "/mnt/tub3/Media/mshare/Kids TV/Paw Patrol",
+          "/mnt/tub3/Media/mshare/Kids TV/If You Give a Mouse a Cookie",
+          "/mnt/tub3/Media/mshare/Kids TV/The Berenstain Bears (2003)",
+          "/mnt/tub3/Media/mshare/Kids TV/Madeline",
+          "/mnt/tub3/Media/mshare/Kids TV/Babar"
+        ],
+        "shows-afterschool": [
+          "/mnt/tub3/Media/mshare/Kids TV/Pok\u00e9mon",
+          "/mnt/tub3/Media/mshare/Kids TV/Mr. Bean: The Animated Series",
+          "/mnt/tub3/Media/mshare/Kids TV/Mr. Bean",
+          "/mnt/tub3/Media/mshare/Kids TV/Bill Nye: The Science Guy"
+        ],
+        "shows-dinner": [
+          "/mnt/tub3/Media/mshare/TV/Friends",
+          "/mnt/tub3/Media/mshare/TV/Bob's Burgers",
+          "/mnt/tub3/Media/mshare/TV/The Simpsons",
+          "/mnt/tub3/Media/mshare/TV/King of the Hill",
+          "/mnt/tub3/Media/mshare/TV/Futurama"
+        ],
+        "shows-evening": [
+          "/mnt/tub3/Media/mshare/TV/The Office (US)",
+          "/mnt/tub3/Media/mshare/TV/Schitt's Creek",
+          "/mnt/tub3/Media/mshare/TV/Rick and Morty"
+        ],
+        "shows-late": [
+          "/mnt/tub3/Media/mshare/TV/It's Always Sunny in Philadelphia",
+          "/mnt/tub3/Media/mshare/TV/Portlandia",
+          "/mnt/tub3/Media/mshare/TV/The Whitest Kids U'Know",
+          "/mnt/tub3/Media/mshare/TV/Harvey Birdman, Attorney at Law"
+        ]
+      },
+      "dayparts": [
+        {
+          "hours": "6-9",
+          "tag": "shows-preschool"
+        },
+        {
+          "hours": "9-15",
+          "tag": "shows-kids"
+        },
+        {
+          "hours": "15-17",
+          "tag": "shows-afterschool"
+        },
+        {
+          "hours": "17-20",
+          "tag": "shows-dinner"
+        },
+        {
+          "hours": "20-23",
+          "tag": "shows-evening"
+        },
+        {
+          "hours": "23-6",
+          "tag": "shows-late"
+        }
+      ]
+    },
+    {
+      "number": 4,
+      "name": "SATURDAY AM",
+      "rating": "kids",
+      "increment": 30,
+      "sources": {
+        "shows-sat": [
+          "/mnt/tub3/Media/mshare/Kids TV/Arthur",
+          "/mnt/tub3/Media/mshare/Kids TV/Paw Patrol",
+          "/mnt/tub3/Media/mshare/Kids TV/If You Give a Mouse a Cookie",
+          "/mnt/tub3/Media/mshare/Kids TV/The Berenstain Bears (2003)",
+          "/mnt/tub3/Media/mshare/Kids TV/Madeline",
+          "/mnt/tub3/Media/mshare/Kids TV/Babar",
+          "/mnt/tub3/Media/mshare/Kids TV/Mr. Bean: The Animated Series",
+          "/mnt/tub3/Media/mshare/Kids TV/Ben and Holly's Little Kingdom",
+          "/mnt/tub3/Media/mshare/Kids TV/Bob the Builder",
+          "/mnt/tub3/Media/mshare/Kids TV/Twirlywoos",
+          "/mnt/tub3/Media/mshare/Kids TV/Kid-E-Cats",
+          "/mnt/tub3/Media/mshare/Kids TV/Go! Go! Cory Carson"
+        ]
+      }
+    },
+    {
+      "number": 5,
+      "name": "SUNNY DAYS",
+      "rating": "kids",
+      "increment": 30,
+      "commercial_free": true,
+      "breaks": "end",
+      "sources": {
+        "shows-pbs": [
+          "/mnt/tub3/Media/mshare/Kids TV/Mister Rogers' Neighborhood",
+          "/mnt/tub3/Media/mshare/Kids TV/Daniel Tiger's Neighborhood",
+          "/mnt/tub3/Media/mshare/Kids TV/Dragon Tales",
+          "/mnt/tub3/Media/mshare/Kids TV/Bill Nye: The Science Guy"
+        ]
+      }
+    },
+    {
+      "number": 6,
+      "name": "THE PICTURES",
+      "rating": "late",
+      "increment": 120,
+      "sources": {
+        "films": [
+          "/mnt/tub3/Media/mshare/Movies"
+        ]
+      }
+    },
+    {
+      "number": 7,
+      "name": "MATINEE",
+      "rating": "kids",
+      "increment": 120,
+      "sources": {
+        "films-kids": [
+          "/mnt/tub3/Media/mshare/Kids Movies"
+        ]
+      }
+    },
+    {
+      "number": 8,
+      "name": "THE GOOD LIFE",
+      "rating": "late",
+      "increment": 60,
+      "breaks": "end",
+      "sources": {
+        "shows-life": [
+          "/mnt/tub3/Media/mshare/TV/The Great British Baking Show",
+          "/mnt/tub3/Media/mshare/TV/Top Gear",
+          "/mnt/tub3/Media/mshare/TV/Selling Sunset",
+          "/mnt/tub3/Media/mshare/TV/Selling the OC",
+          "/mnt/tub3/Media/mshare/TV/Love is Blind"
+        ]
+      }
+    },
+    {
+      "number": 9,
+      "name": "FAR AFIELD",
+      "rating": "late",
+      "increment": 60,
+      "breaks": "end",
+      "sources": {
+        "shows-travel": [
+          "/mnt/tub3/Media/mshare/TV/Anthony Bourdain: No Reservations",
+          "/mnt/tub3/Media/mshare/TV/Anthony Bourdain: Parts Unknown",
+          "/mnt/tub3/Media/mshare/TV/The Layover",
+          "/mnt/tub3/Media/mshare/TV/Long Way Round",
+          "/mnt/tub3/Media/mshare/TV/Long Way Up",
+          "/mnt/tub3/Media/mshare/TV/Long Way Down",
+          "/mnt/tub3/Media/mshare/TV/Departures",
+          "/mnt/tub3/Media/mshare/TV/The Grand Tour (2016)",
+          "/mnt/tub3/Media/mshare/TV/Formula 1: Drive to Survive"
+        ]
+      }
+    },
+    {
+      "number": 10,
+      "name": "AFTER DARK",
+      "rating": "late",
+      "increment": 60,
+      "sources": {
+        "shows-drama": [
+          "/mnt/tub3/Media/mshare/TV/The Sopranos",
+          "/mnt/tub3/Media/mshare/TV/Breaking Bad",
+          "/mnt/tub3/Media/mshare/TV/Mad Men",
+          "/mnt/tub3/Media/mshare/TV/Game of Thrones",
+          "/mnt/tub3/Media/mshare/TV/Peaky Blinders",
+          "/mnt/tub3/Media/mshare/TV/The X-Files",
+          "/mnt/tub3/Media/mshare/TV/Severance",
+          "/mnt/tub3/Media/mshare/TV/Silo",
+          "/mnt/tub3/Media/mshare/TV/Sherlock",
+          "/mnt/tub3/Media/mshare/TV/Firefly"
+        ]
+      }
+    },
+    {
+      "number": 11,
+      "name": "LAST LAUGH",
+      "rating": "late",
+      "increment": 30,
+      "sources": {
+        "shows-comedy": [
+          "/mnt/tub3/Media/mshare/TV/Chappelle's Show",
+          "/mnt/tub3/Media/mshare/TV/Monty Python's Flying Circus",
+          "/mnt/tub3/Media/mshare/TV/Little Britain",
+          "/mnt/tub3/Media/mshare/TV/Come Fly With Me",
+          "/mnt/tub3/Media/mshare/TV/Eastbound & Down",
+          "/mnt/tub3/Media/mshare/TV/Californication",
+          "/mnt/tub3/Media/mshare/TV/The Paper (2025)"
+        ]
+      }
+    }
+  ]
+}

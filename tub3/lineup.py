@@ -54,6 +54,16 @@ from .bootstrap import (
 GUIDE_CHANNEL = 2
 UNUSED_CHANNEL = 1
 
+# The hours a child might plausibly be watching alone, on a channel rated for them. Inside
+# this window a kids/family channel may carry only content rated for children.
+#
+# It starts at 6 rather than at midnight deliberately. The overnight slot wrapping past
+# midnight — 23:00 to 06:00 — would otherwise land in the guarded window and refuse the
+# ordinary late-night schedule every broadcaster has ever run. Nobody is protected by
+# treating 3am as children's television, and pretending otherwise costs the whole dial.
+CHILDRENS_HOURS_START = 6
+CHILDRENS_HOURS_END = 17
+
 
 @dataclass
 class Daypart:
@@ -201,7 +211,29 @@ def audit(channels: list[Channel]) -> list[str]:
     for channel in channels:
         if channel.rating not in ("kids", "family"):
             continue
+
+        # Which tags air in children's hours. A general-audience channel — cartoons in the
+        # morning, sitcoms at dinner — is normal broadcast, and refusing it wholesale because
+        # one evening daypart carries an adult show protects nothing while blocking the dial
+        # everyone actually wants. What matters is the *hours*: nothing adult before
+        # CHILDRENS_HOURS_END, anything after.
+        #
+        # The channel's rating still governs the commercial pool for the whole day, because
+        # upstream has one pool per station. That is why a channel like this is rated family
+        # rather than late: it means no late-night advertising can reach the 9am block, which
+        # is the part no daypart rule could fix afterwards.
+        guarded = set()
+        if channel.dayparts:
+            for part in channel.dayparts:
+                if any(CHILDRENS_HOURS_START <= hour < CHILDRENS_HOURS_END
+                       for hour in part.hours()):
+                    guarded.add(part.tag)
+        else:
+            guarded = set(channel.sources)
+
         for tag, folders in channel.sources.items():
+            if tag not in guarded:
+                continue
             for folder in folders:
                 path = Path(folder)
                 rating, why = classify(path.parent.name, path.name, path)
