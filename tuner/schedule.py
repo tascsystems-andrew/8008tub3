@@ -186,6 +186,36 @@ class Channel:
         raise NotImplementedError
 
 
+class GuideChannel(Channel):
+    """Channel 2: the listings, over music.
+
+    It has no schedule of its own and never goes off air, which is the whole idea — the guide
+    is the one thing always there to tell you what everything else is doing. `now` therefore
+    returns a placeholder airing rather than reading any timetable, and the real content is
+    drawn by `tuner.guide` from the *other* channels in this lineup.
+
+    Carrying `is_guide` on the channel rather than sniffing the number keeps the special case
+    in one place. `Box` asks the channel what it is; nothing else has to know that 2 is
+    spoken for.
+    """
+
+    is_guide = True
+
+    def __init__(self, number: int, name: str, music: list[Path] | None = None):
+        super().__init__(number, name)
+        self.music = list(music or [])
+
+    def now(self, at: float) -> Airing:
+        return Airing(
+            channel=self.number,
+            channel_name=self.name,
+            program=Program(Path(""), 0.0, self.name),
+            offset=0.0,
+            started_at=at,
+            ends_at=at + 3600.0,
+        )
+
+
 class LoopChannel(Channel):
     """A playlist repeating forever from a fixed epoch.
 

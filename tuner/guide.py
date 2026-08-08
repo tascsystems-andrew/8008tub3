@@ -123,7 +123,10 @@ def rows_from_lineup(lineup, now: float, guide_channel: int) -> list[Row]:
     rows: list[Row] = []
 
     for number in getattr(lineup, "numbers", []):
-        channel = lineup.channels.get(number) if hasattr(lineup, "channels") else None
+        # `Lineup.channels` is a list and `get` is the lookup — this asked the list for `.get`
+        # and raised AttributeError on the first channel. Never seen, because the module has
+        # never been called.
+        channel = lineup.get(number) if hasattr(lineup, "get") else None
         name = getattr(channel, "name", f"CH {number}")
         row = Row(number=number, name=name)
 
@@ -147,7 +150,18 @@ def rows_from_lineup(lineup, now: float, guide_channel: int) -> list[Row]:
                 cursor += 300
                 continue
             title = _title_of(airing)
-            end = cursor + max(60.0, getattr(airing, "remaining", lambda: 1800)())
+            # `programme_remaining`, not `remaining`: the latter counts to the next thing in
+            # the plan, which during a show is its next ad break. A guide built from that
+            # would chop every programme into five-minute slivers.
+            #
+            # Both are properties returning a float. This line used to call the result —
+            # `getattr(airing, "remaining", lambda: 1800)()` — which raises TypeError against
+            # any real Airing, so the first channel with a schedule would have blanked the
+            # guide. Nothing has ever called this module, which is why it never surfaced.
+            span = getattr(airing, "programme_remaining", None)
+            if span is None:
+                span = getattr(airing, "remaining", 1800.0)
+            end = cursor + max(60.0, float(span))
             if row.slots and row.slots[-1].title == title:
                 row.slots[-1].end = end          # same programme, extend it
             else:
