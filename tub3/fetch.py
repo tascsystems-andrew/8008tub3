@@ -31,7 +31,22 @@ from pathlib import Path
 
 # Prefer H.264 + m4a, then any mp4, then whatever exists. normalize can fix anything, but not
 # needing to is faster and lossless.
-FORMAT = "bestvideo[vcodec^=avc1]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+# Capped at 1080p, which is a property of the box rather than a preference. Measured on the
+# Pi 5: a 3840x2160 HEVC file drops about half its frames — 238 in 20 seconds — with the
+# cache full and the cheap pacing path selected. It cannot decode 4K in software, so
+# downloading 4K means downloading something that cannot be played.
+#
+# The trap is that this is invisible at fetch time and only shows up on the television:
+# YouTube will happily serve 2160p for anything that has it, and two of the first three
+# ambiance videos offered were 4K.
+MAX_HEIGHT = 1080
+
+FORMAT = (
+    f"bestvideo[height<={MAX_HEIGHT}][vcodec^=avc1]+bestaudio[ext=m4a]"
+    f"/bestvideo[height<={MAX_HEIGHT}]+bestaudio"
+    f"/best[height<={MAX_HEIGHT}]"
+    f"/best"
+)
 
 # No brackets, no spaces, no glob metacharacters. The id keeps re-runs idempotent and makes
 # duplicates from different searches obvious.
