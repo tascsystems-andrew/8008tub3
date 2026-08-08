@@ -17,6 +17,7 @@ What it actually controls is what fills that time: commercials, or station ident
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -33,7 +34,10 @@ DEFAULTS = {
     "ad_load": 3,          # 1..5; 3 is broadcast-realistic
     "cooldown_minutes": 45,
     "fullscreen": False,
-    "programs_dir": "",
+    # A list, not a path. A library is rarely one folder, and pointing at a common parent
+    # to catch several of them sweeps in everything else that happens to live there — home
+    # video, half-finished downloads, the kids' stuff on an adult channel.
+    "programs_dirs": [],
     "commercials_dir": "",
 }
 
@@ -55,6 +59,12 @@ def load_settings() -> dict:
             data.update(json.loads(SETTINGS.read_text()))
         except (json.JSONDecodeError, OSError):
             pass
+    # Migrate the single programs_dir this used to hold. Someone who set it before the
+    # upgrade should not silently lose their channel on the next rebuild.
+    legacy = data.pop("programs_dir", "")
+    if legacy and not data.get("programs_dirs"):
+        data["programs_dirs"] = [legacy]
+    data["programs_dirs"] = [str(p) for p in (data.get("programs_dirs") or []) if p]
     return data
 
 
@@ -63,6 +73,16 @@ def save_settings(data: dict) -> dict:
     for key in DEFAULTS:
         if key in data:
             current[key] = data[key]
+    if "programs_dirs" in data:
+        # Deduplicate while keeping order: the same folder twice would double every
+        # episode's odds of being picked, which reads as "why is it repeating".
+        seen, unique = set(), []
+        for folder in data["programs_dirs"]:
+            folder = str(folder).rstrip("/")
+            if folder and folder not in seen:
+                seen.add(folder)
+                unique.append(folder)
+        current["programs_dirs"] = unique
     SETTINGS.write_text(json.dumps(current, indent=2))
     return current
 
@@ -99,6 +119,104 @@ def nas(request: dict, timeout: float = 60.0) -> dict:
         return json.loads(result.stdout or "{}")
     except json.JSONDecodeError:
         return {"ok": False, "error": "The storage helper returned something unreadable."}
+
+
+BROWSE_ROOT = Path("/mnt/tub3")
+BROWSE_LIMIT = 300
+# Each folder inspected is a round trip to the NAS. Over a site-to-site VPN at ~38 ms that
+# is the difference between a browser that feels instant and one that stalls, so the video
+# count is only taken for the first N folders and the rest are listed without it.
+COUNT_LIMIT = 80
+
+
+def browse(where: str) -> dict:
+    """List folders for the picker.
+
+    Typing a path from memory is a guessing game, and this is a television, not a shell.
+    Confined to /mnt/tub3 by resolving first and checking containment — a symlink on the
+    share pointing at / would otherwise turn this endpoint into a filesystem browser for
+    anyone on the network.
+    """
+    try:
+        base = BROWSE_ROOT.resolve()
+    except OSError:
+        return {"ok": False, "error": "No network drive is connected yet."}
+
+    target = Path(where) if where else base
+    try:
+        resolved = target.resolve()
+    except (OSError, ValueError):
+        return {"ok": False, "error": "That path cannot be read."}
+
+    if not (resolved == base or resolved.is_relative_to(base)):
+        return {"ok": False, "error": "That folder is outside the connected drive."}
+    if not resolved.is_dir():
+        return {"ok": False, "error": "That is not a folder."}
+
+    # Deferred, as elsewhere in this file: tub3.bootstrap pulls in the card renderer, and
+    # the settings page should not carry that import cost on every request.
+    from .bootstrap import VIDEO_SUFFIXES
+
+    folders, videos = [], 0
+    try:
+        with os.scandir(resolved) as entries:
+            for entry in entries:
+                if entry.name.startswith("."):
+                    continue
+                try:
+                    if entry.is_dir():
+                        folders.append(entry.name)
+                    elif Path(entry.name).suffix.lower() in VIDEO_SUFFIXES:
+                        videos += 1
+                except OSError:
+                    continue
+    except OSError as exc:
+        return {"ok": False, "error": f"Could not read that folder: {exc.strerror or exc}"}
+
+    folders.sort(key=str.lower)
+    out = []
+    for index, name in enumerate(folders[:BROWSE_LIMIT]):
+        entry = {"name": name, "path": str(resolved / name)}
+        if index < COUNT_LIMIT:
+            entry.update(_shallow_counts(resolved / name))
+        out.append(entry)
+
+    return {
+        "ok": True,
+        "path": str(resolved),
+        "parent": None if resolved == base else str(resolved.parent),
+        "at_root": resolved == base,
+        "videos_here": videos,
+        "folders": out,
+        "truncated": len(folders) > BROWSE_LIMIT,
+    }
+
+
+def _shallow_counts(folder: Path) -> dict:
+    """Videos directly inside, and whether there is anything deeper.
+
+    Deliberately not recursive. A recursive count of a TV library over SMB would take
+    minutes; this takes one directory read, and it is enough to answer the only question
+    the picker needs to answer — is this the folder, or is it one above it?
+    """
+    from .bootstrap import VIDEO_SUFFIXES
+
+    videos = subdirs = 0
+    try:
+        with os.scandir(folder) as entries:
+            for entry in entries:
+                if entry.name.startswith("."):
+                    continue
+                try:
+                    if entry.is_dir():
+                        subdirs += 1
+                    elif Path(entry.name).suffix.lower() in VIDEO_SUFFIXES:
+                        videos += 1
+                except OSError:
+                    continue
+    except OSError:
+        return {}
+    return {"videos": videos, "subdirs": subdirs}
 
 
 def _scrub(payload: dict) -> dict:
@@ -217,6 +335,24 @@ PAGE = """<!doctype html>
  .pick{display:inline-block;margin:3px 5px 0 0;padding:3px 9px;border:1px solid var(--line);
    border-radius:5px;cursor:pointer;font:12px ui-monospace,monospace;color:var(--amber)}
  .pick:hover{border-color:var(--amber)}
+ .modal{position:fixed;inset:0;background:rgba(0,0,0,.66);display:flex;
+   align-items:center;justify-content:center;padding:20px;z-index:9}
+ .modal[hidden]{display:none}
+ .sheet{background:var(--card);border:1px solid var(--line);border-radius:12px;
+   padding:20px;width:min(620px,100%);max-height:82vh;display:flex;flex-direction:column}
+ .crumb{font:12px ui-monospace,monospace;color:var(--dim);word-break:break-all;
+   padding-bottom:10px;border-bottom:1px solid var(--line)}
+ .picklist{overflow:auto;margin-top:6px;flex:1;min-height:120px}
+ .frow{display:flex;justify-content:space-between;align-items:center;gap:10px;
+   padding:9px 4px;border-bottom:1px solid var(--line);font-size:14px}
+ .frow:last-child{border:0}
+ .fname{cursor:pointer;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ .fname:hover{color:var(--amber)}
+ .chip{display:flex;justify-content:space-between;align-items:center;gap:10px;
+   padding:8px 0;border-bottom:1px solid var(--line);font:13px ui-monospace,monospace}
+ .chip:last-child{border:0}
+ .x{cursor:pointer;color:var(--dim);padding:0 4px}
+ .x:hover{color:#ff6b6b}
 </style>
 <div class=wrap>
  <div class=brand>
@@ -278,22 +414,50 @@ PAGE = """<!doctype html>
  </div>
 
  <div class=card>
-  <h2>Where your stuff is</h2>
-  <label>Shows</label><input type=text id=programs placeholder="/mnt/tub3/Media/TV">
-  <div class=hint id=browse_programs></div>
-  <label>Commercials</label><input type=text id=commercials placeholder="/mnt/tub3/Media/Commercials">
-  <div class=hint id=browse_commercials></div>
-  <div class=hint>The commercials folder holds Kids / Family / Late / Unsorted. Anything in
-   Unsorted is treated as Late, so it can never reach a kids channel.</div>
-  <label style="display:flex;align-items:center;gap:9px;margin-top:16px">
-   <input type=checkbox id=fullscreen style="width:auto;accent-color:var(--amber)">
-   Fill the screen
-  </label>
-  <div style="margin-top:18px;display:flex;gap:10px">
+  <h2>Shows</h2>
+  <div id=proglist></div>
+  <button class=ghost id=addshows>Add a folder…</button>
+  <div class=hint>Add each folder you want on the channel. Anything you do not add is
+   ignored — pointing at one folder above them all would sweep in everything else too.</div>
+ </div>
+
+ <div class=card>
+  <h2>Commercials</h2>
+  <div id=commlist></div>
+  <button class=ghost id=setcomm>Choose folder…</button>
+  <div class=hint>One folder, holding Kids / Family / Late / Unsorted. Anything in Unsorted
+   counts as Late, so it can never reach a kids channel.</div>
+ </div>
+
+ <div class=card>
+  <div style="margin-bottom:14px;display:flex;gap:10px;flex-wrap:wrap">
    <button id=save>Save</button>
    <button class=ghost id=rebuild>Rebuild schedule</button>
   </div>
   <div class=hint id=saved></div>
+  <label style="display:flex;align-items:center;gap:9px;margin-top:18px">
+   <input type=checkbox id=fullscreen style="width:auto;accent-color:var(--amber)">
+   Fill the screen
+  </label>
+  <div class=hint>Desktop app only. This box always fills the screen.</div>
+ </div>
+</div>
+
+<!-- The folder picker. A dialog rather than a page, so choosing a folder never loses
+     whatever else you had half-typed. -->
+<div id=picker class=modal hidden>
+ <div class=sheet>
+  <div class=row style="margin-bottom:10px">
+   <b id=pickwhat>Choose a folder</b>
+   <span class=tag id=pickclose style="cursor:pointer">close</span>
+  </div>
+  <div class=crumb id=pickpath></div>
+  <div id=picklist class=picklist>Loading…</div>
+  <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
+   <button class=ghost id=pickup>Up</button>
+   <button id=pickhere>Use this folder</button>
+  </div>
+  <div class=hint id=pickmsg></div>
  </div>
 </div>
 <script>
@@ -313,8 +477,9 @@ async function refresh(){
   $('#sub').textContent = `${s.channels.length} channel(s) · ${s.settings.cooldown_minutes} min ad cooldown`;
   $('#adload').value = s.settings.ad_load;
   $('#fullscreen').checked = !!s.settings.fullscreen;
-  $('#programs').value = s.settings.programs_dir||'';
-  $('#commercials').value = s.settings.commercials_dir||'';
+  PROGRAMS = (s.settings.programs_dirs||[]).slice();
+  COMMERCIALS = s.settings.commercials_dir||'';
+  paintFolders();
   paintStorage(s.storage);
   paintLoad();
   const inv=s.inventory;
@@ -341,15 +506,77 @@ function paintStorage(st){
       <span class=tag>${m.free_gb} GB free</span></div></div>
       <div style="margin:8px 0 4px">${top}</div>`;
   }).join('');
-  // Clicking a folder fills whichever box was focused last — no typing paths by hand.
-  box.querySelectorAll('.pick').forEach(el=>el.onclick=()=>{
-    const target=LASTFIELD||'#programs';
-    $(target).value=el.dataset.path;
-    $('#saved').textContent=`Set ${target==='#programs'?'Shows':'Commercials'} to ${el.dataset.path}. Save to keep it.`;
-  });
 }
-let LASTFIELD='#programs';
-['#programs','#commercials'].forEach(id=>$(id).addEventListener('focus',()=>LASTFIELD=id));
+
+// --- chosen folders ------------------------------------------------------------------
+let PROGRAMS=[], COMMERCIALS='';
+function paintFolders(){
+  $('#proglist').innerHTML = PROGRAMS.length
+    ? PROGRAMS.map((p,i)=>`<div class=chip><span>${p}</span>
+        <span class=x data-i="${i}" title="Remove">&times;</span></div>`).join('')
+    : '<div class=hint>None yet.</div>';
+  $('#proglist').querySelectorAll('.x').forEach(el=>el.onclick=()=>{
+    PROGRAMS.splice(+el.dataset.i,1); paintFolders(); dirty();
+  });
+  $('#commlist').innerHTML = COMMERCIALS
+    ? `<div class=chip><span>${COMMERCIALS}</span>
+        <span class=x id=commx title="Remove">&times;</span></div>`
+    : '<div class=hint>None yet.</div>';
+  const cx=$('#commx'); if(cx) cx.onclick=()=>{COMMERCIALS=''; paintFolders(); dirty();};
+}
+function dirty(){ $('#saved').textContent='Not saved yet — press Save.'; }
+
+// --- folder picker -------------------------------------------------------------------
+let PICKMODE='programs', PICKPATH='', PICKPARENT=null;
+async function openPicker(mode){
+  PICKMODE=mode;
+  $('#pickwhat').textContent = mode==='programs' ? 'Add a shows folder' : 'Choose the commercials folder';
+  $('#picker').hidden=false; $('#pickmsg').textContent='';
+  await loadPicker('');
+}
+async function loadPicker(path){
+  $('#picklist').textContent='Loading…';
+  const r=await (await fetch('/api/browse',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({path})})).json();
+  if(!r.ok){ $('#picklist').innerHTML=`<div class="hint warn">${r.error}</div>`; return; }
+  PICKPATH=r.path; PICKPARENT=r.parent;
+  $('#pickpath').textContent=r.path;
+  $('#pickup').disabled=!r.parent;
+  $('#pickup').style.opacity=r.parent?1:.4;
+  const rows=r.folders.map(f=>{
+    // videos/subdirs answer the only question the picker has to answer: is this the
+    // folder, or is it one above it?
+    let tag='';
+    if(f.videos!==undefined)
+      tag = f.videos ? `${f.videos} video${f.videos===1?'':'s'}`
+                     : (f.subdirs ? `${f.subdirs} folder${f.subdirs===1?'':'s'}` : 'empty');
+    return `<div class=frow>
+      <span class=fname data-path="${f.path}">${f.name}</span>
+      <span class=tag>${tag}</span>
+      <span class=pick data-add="${f.path}">add</span></div>`;
+  }).join('');
+  $('#picklist').innerHTML = rows || '<div class=hint>No folders in here.</div>';
+  if(r.videos_here) $('#pickmsg').textContent=`${r.videos_here} video file(s) directly in this folder.`;
+  $('#picklist').querySelectorAll('.fname').forEach(el=>
+    el.onclick=()=>loadPicker(el.dataset.path));
+  $('#picklist').querySelectorAll('[data-add]').forEach(el=>
+    el.onclick=()=>choose(el.dataset.add));
+}
+function choose(path){
+  if(PICKMODE==='programs'){
+    if(!PROGRAMS.includes(path)) PROGRAMS.push(path);
+  } else { COMMERCIALS=path; }
+  paintFolders(); dirty();
+  // Adding several folders in a row is the common case, so shows keeps the picker open.
+  if(PICKMODE==='programs'){ $('#pickmsg').textContent=`Added ${path}`; }
+  else { $('#picker').hidden=true; }
+}
+$('#addshows').onclick=()=>openPicker('programs');
+$('#setcomm').onclick=()=>openPicker('commercials');
+$('#pickclose').onclick=()=>$('#picker').hidden=true;
+$('#pickup').onclick=()=>{ if(PICKPARENT) loadPicker(PICKPARENT); };
+$('#pickhere').onclick=()=>choose(PICKPATH);
+$('#picker').onclick=e=>{ if(e.target.id==='picker') $('#picker').hidden=true; };
 
 function nasBody(){
   return {server:$('#nasserver').value.trim(), share:$('#nasshare').value,
@@ -384,8 +611,10 @@ $('#nasmount').onclick=async()=>{
 $('#adload').addEventListener('input',paintLoad);
 $('#save').onclick=async()=>{
   await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({ad_load:+$('#adload').value,fullscreen:$('#fullscreen').checked,programs_dir:$('#programs').value,
-      commercials_dir:$('#commercials').value})});
+    body:JSON.stringify({ad_load:+$('#adload').value,
+      fullscreen:$('#fullscreen').checked,
+      programs_dirs:PROGRAMS,
+      commercials_dir:COMMERCIALS})});
   $('#saved').textContent='Saved. Rebuild to apply to the schedule.';
   refresh();
 };
@@ -462,29 +691,16 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/browse":
-            # Which folders are inside a mounted share. Typing a path from memory is a
-            # guessing game, and this is a television, not a shell.
-            root = Path(str(payload.get("path") or ""))
-            base = Path("/mnt/tub3")
-            try:
-                resolved = root.resolve()
-                if not resolved.is_relative_to(base.resolve()) or not resolved.is_dir():
-                    self._json({"ok": False, "error": "Not a folder inside a mounted share."})
-                    return
-                folders = sorted(p.name for p in resolved.iterdir()
-                                 if p.is_dir() and not p.name.startswith("."))
-            except OSError as exc:
-                self._json({"ok": False, "error": str(exc)})
-                return
-            self._json({"ok": True, "path": str(resolved), "folders": folders[:200]})
+            self._json(browse(str(payload.get("path") or "")))
             return
 
         if path == "/api/rebuild":
             settings = load_settings()
-            programs = settings.get("programs_dir")
+            programs = settings.get("programs_dirs")
             ads = settings.get("commercials_dir")
             if not programs or not ads:
-                self._json({"message": "Set both folders first."})
+                self._json({"message": "Add at least one shows folder and "
+                                       "a commercials folder first."})
                 return
             self._json({"message": "Rebuild started — this takes a minute."})
             threading.Thread(target=_rebuild, args=(settings,), daemon=True).start()
@@ -500,15 +716,19 @@ def _rebuild(settings: dict) -> None:
 
     content_share = AD_LOAD[int(settings.get("ad_load", 3))][0]
     repo = Path(__file__).resolve().parent.parent
+    # --programs is repeatable, one flag per folder.
+    programs: list[str] = []
+    for folder in settings.get("programs_dirs") or []:
+        programs += ["--programs", folder]
     subprocess.run(
         [sys.executable, "-m", "tub3.bootstrap",
-         "--programs", settings["programs_dir"],
+         *programs,
          "--ads", settings["commercials_dir"],
          "--media-root", str(repo / "media"),
          "--channel", "3",
          "--cooldown", str(settings.get("cooldown_minutes", 45)),
          "--days", "1"],
-        cwd=repo, env={**__import__("os").environ, "TUB3_CONTENT_SHARE": str(content_share)},
+        cwd=repo, env={**os.environ, "TUB3_CONTENT_SHARE": str(content_share)},
         capture_output=True,
     )
 

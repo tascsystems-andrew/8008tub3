@@ -56,9 +56,14 @@ say "Sending source"
 # warning per file at the far end; COPYFILE_DISABLE stops it emitting ._ AppleDouble
 # companions. Neither breaks the transfer, but a screenful of warnings on every deploy
 # trains you to ignore output that might one day say something worth reading.
+# settings.json is excluded deliberately. It is the *box's* configuration — which folders
+# it plays, mounted at paths that exist on the Pi and nowhere else. Shipping the Mac's copy
+# overwrote it on every deploy, silently replacing the Pi's library with /Volumes paths
+# that cannot resolve there. A deploy pushes code; it must not push state.
 COPYFILE_DISABLE=1 tar --no-xattrs \
     --exclude='./vendor' --exclude='./.venv' --exclude='./.venv-build' \
     --exclude='./__pycache__' --exclude='*.pyc' --exclude='./runtime' \
+    --exclude='./settings.json' --exclude='./media' \
     -cf - . | ssh "$HOST" "mkdir -p ~/$DEST && tar -xf - -C ~/$DEST"
 
 SENT="$(ssh "$HOST" "find ~/$DEST -type f ! -path '*/.git/*' | wc -l" | tr -d ' ')"
