@@ -63,6 +63,31 @@ class PlanEntry:
         return self.path.stem.replace("_", " ")
 
 
+# Upstream tags every plan entry it writes: "commercial" for a spot, "bump" for an ident
+# (fs42/liquid_blocks.py:356-360). Anything else is the programme.
+BREAK_TYPES = frozenset({"commercial", "bump"})
+
+
+def _feature_slot(entries: tuple, index: int) -> int:
+    """Which entry in the plan is the *programme*, seen from `index`.
+
+    Backwards first. During a mid-roll the programme is the thing that was already playing,
+    and the viewer's question is "what am I watching", not "what is this advert". Forwards is
+    the fallback for a block that opens with an ident, where there is nothing behind us yet.
+    """
+    if not entries or not (0 <= index < len(entries)):
+        return index
+    if entries[index].content_type not in BREAK_TYPES:
+        return index
+    for position in range(index - 1, -1, -1):
+        if entries[position].content_type not in BREAK_TYPES:
+            return position
+    for position in range(index + 1, len(entries)):
+        if entries[position].content_type not in BREAK_TYPES:
+            return position
+    return index
+
+
 @dataclass(frozen=True)
 class Airing:
     """What is on, and where we are in it."""
@@ -92,6 +117,25 @@ class Airing:
         return max(0.0, self.program.duration - self.offset)
 
     @property
+    def feature_path(self) -> Path:
+        """The programme's file, not whatever is on screen this second.
+
+        `program.path` is what the player is told to open, so during a break it is the advert
+        — correct for playback and wrong for the bug, which was showing the name of a
+        commercial as though it were the show. Kept as a separate property rather than
+        changing `program`, because `Box.tune` opens `program.path` and must keep doing so.
+        """
+        if not self.plan:
+            return self.program.path
+        return self.plan[_feature_slot(self.plan, self.index)].path
+
+    @property
+    def in_break(self) -> bool:
+        if not self.plan or not (0 <= self.index < len(self.plan)):
+            return False
+        return self.plan[self.index].content_type in BREAK_TYPES
+
+    @property
     def programme_remaining(self) -> float:
         """Wall-clock seconds until this programme actually finishes, ads included.
 
@@ -107,7 +151,10 @@ class Airing:
         if not self.plan:
             return self.remaining
 
-        here = self.plan[self.index].path
+        # Keyed on the programme, not on the current entry. Measured from an advert it used
+        # to look forward for more of *that advert*, find none, and report the seconds left
+        # in the spot — so the countdown collapsed to "ending" every time a break started.
+        here = self.feature_path
         last = self.index
         for position in range(self.index + 1, len(self.plan)):
             if self.plan[position].path == here:
@@ -364,7 +411,9 @@ class LiquidChannel(Channel):
 
         # The bug shows what you are *watching*, which stays the programme's name even during
         # its ad break — that is what a cable box did, and "cola 30s" on screen would be worse.
-        display = block.title or entry.name
+        # The fallback has to name the feature too, or a block with no title reverts to the
+        # advert's filename the moment a break starts.
+        display = block.title or block.entries[_feature_slot(block.entries, slot)].name
 
         return Airing(
             channel=self.number,

@@ -73,7 +73,7 @@ def render_bug(airing: Airing) -> str:
 
     minutes_left = int(airing.programme_remaining // 60)
     remaining = f"{minutes_left} min left" if minutes_left else "ending"
-    show, detail = describe(airing.program.path)
+    show, detail = describe(airing.feature_path)
 
     lines = [f"{{\\b1}}{airing.channel_name}{{\\b0}}", show]
     if detail:

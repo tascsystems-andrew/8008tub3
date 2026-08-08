@@ -96,6 +96,14 @@ def describe(path: str | Path) -> tuple[str, str]:
     if "__" in stem:
         stem = stem.split("__", 1)[1]
 
+    # Plex knows the real episode title, because it matched the file against TVDB. Filename
+    # parsing is the fallback and only the fallback: a release name frequently has no episode
+    # title in it at all — `PAW.Patrol.S01E01.1080p.WEB.x264-CRiMSON-postbot` carries a
+    # resolution, a codec, a group and a bot, and nothing a viewer wants — and any scraper
+    # confident enough to find a title in that will find one in noise too.
+    if entry and entry.get("episode"):
+        return (entry.get("show") or clean(stem))[:44] or "—", str(entry["episode"])[:52]
+
     season, number = parse_episode(stem)
     detail = episode_title(stem)
 
@@ -121,8 +129,29 @@ def describe(path: str | Path) -> tuple[str, str]:
     return show[:44] or "—", detail[:52] if _plausible(detail) else ""
 
 
+# Words that only ever appear in a release name. Not an exhaustive list of scene groups —
+# that is unwinnable — but the shapes that survive `clean` and then read as a title.
+# "Obfuscated", "postbot" and "proper" are real English words, which is exactly why the
+# generic word-shape tests let them through.
+RELEASE_WORDS = frozenset({
+    "web", "webrip", "webdl", "bluray", "brrip", "bdrip", "hdrip", "dvdrip", "hdtv", "pdtv",
+    "remux", "upscaled", "obfuscated", "postbot", "proper", "repack", "internal", "extended",
+    "remastered", "signature", "edition", "commentary", "comm", "subs", "dual", "audio",
+    "bit", "ch", "hevc", "avc", "sdtv", "dvd", "bd", "ip", "amzn", "dsnp", "hmax", "nf",
+    "pcok", "iso", "rarbg", "yify", "yts", "galaxyrg", "tgx", "crimson", "megusta", "psa",
+    "pof", "ivy", "lama", "evo", "flux", "swtyblz", "markii", "predikat", "anoxmous",
+    "nikt0", "x0r", "d3g", "amiable", "kingdom", "playnow", "cbfm", "rng", "creed", "hbd",
+    "salt", "esq", "srs", "ngp", "gaz", "deceit", "thc", "megatron", "animerg", "jrr", "v2",
+})
+
+
 def _plausible(text: str) -> bool:
-    """Is this an episode title, or is it debris left over from a release name?"""
+    """Is this an episode title, or is it debris left over from a release name?
+
+    Biased towards saying no. A blank second line on the bug is unremarkable; a confident
+    line reading "Web 2 crimson obfuscated" is read as the name of what you are watching,
+    and is worse than showing nothing at all.
+    """
     if len(text) < 3 or len(text) > 60:
         return False
     words = text.split()
@@ -137,19 +166,37 @@ def _plausible(text: str) -> bool:
     # A real title has at least one proper word in it. "AAC2 0" and "x264 SRS" do not.
     if not any(len(word) >= 4 and word.isalpha() for word in words):
         return False
+
+    # Any release vocabulary at all disqualifies the whole string. An episode really called
+    # "Dual Audio" does not exist; a release tagged that way is most of this library.
+    lowered = [word.strip("()[[]{}").lower() for word in words]
+    if any(word in RELEASE_WORDS for word in lowered):
+        return False
+    # Two real words minimum. Single survivors are almost always a group name that happened
+    # to look like English.
+    if sum(1 for word in lowered if len(word) >= 3 and word.isalpha()) < 2:
+        return False
     return True
 
 
 def build(pool_root: Path, plex_client=None) -> dict:
-    """Resolve every pooled file to a show name, once, at schedule-build time."""
-    from tub3.plex import lookup as plex_lookup, path_index
+    """Resolve every pooled file to a show and episode name, once, at build time."""
+    from tub3.plex import (episode_index, fill_show_paths, lookup as plex_lookup,
+                           lookup_episode, path_index)
 
     index = {}
+    episodes: dict = {}
     if plex_client is not None:
         try:
-            index = path_index(plex_client.library())
+            library = plex_client.library()
+            # Shows arrive with no path of their own; derive it from their episodes, or the
+            # show-level fallback below can never match a series folder.
+            fill_show_paths(plex_client, library)
+            index = path_index(library)
+            # One request per show, not per episode: `/allLeaves` returns the whole series.
+            episodes = episode_index(plex_client, library)
         except Exception:  # noqa: BLE001 - a title map is a nicety, never a blocker
-            index = {}
+            index, episodes = {}, {}
 
     out: dict[str, dict] = {}
     for pool in sorted(Path(pool_root).iterdir()):
@@ -165,6 +212,11 @@ def build(pool_root: Path, plex_client=None) -> dict:
             # path tail is "Kids TV/Show" — they can never meet. Films sit directly in the
             # library folder, so their parent matches first. Four levels covers both without
             # climbing out of the library.
+            # The episode is the precise answer and is keyed on the file itself, so it is
+            # tried first. The show lookup below is the fallback for films and for anything
+            # Plex has not matched.
+            episode = lookup_episode(episodes, real) if episodes else None
+
             item = None
             if index:
                 candidate = real
@@ -175,8 +227,18 @@ def build(pool_root: Path, plex_client=None) -> dict:
                     if candidate.parent == candidate:
                         break
                     candidate = candidate.parent
-            if item is None:
+
+            if episode is None and item is None:
                 continue
-            out[str(real)] = {"show": item.title, "rating": item.content_rating,
-                              "year": item.year}
+
+            entry: dict = {}
+            if item is not None:
+                entry.update({"show": item.title, "rating": item.content_rating,
+                              "year": item.year})
+            if episode is not None:
+                entry["show"] = episode.show or entry.get("show", "")
+                entry["episode"] = episode.title
+                entry["season"] = episode.season
+                entry["number"] = episode.episode
+            out[str(real)] = entry
     return out

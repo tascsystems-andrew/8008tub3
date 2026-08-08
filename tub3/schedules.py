@@ -72,6 +72,17 @@ def _clear_blocks(name: str) -> int:
             return 0
 
 
+def _say(*parts) -> None:
+    """Progress, flushed.
+
+    This runs for tens of minutes behind a redirect, where Python block-buffers stdout and
+    nothing appears until the buffer fills. A long build with no output is indistinguishable
+    from a hung one — and the person waiting is looking at a standby card with no way to tell
+    which they have.
+    """
+    print(*parts, flush=True)
+
+
 def schedule_all(
     days: int = 2,
     *,
@@ -122,7 +133,7 @@ def schedule_all(
             continue
 
         if not quiet:
-            print(f"\n  ch {channel:<3} {name}")
+            _say(f"\n  ch {channel:<3} {name}")
 
         # Ad selection is driven by class attributes on our catalog subclass, so the pool has
         # to be re-bound for each station — they do not all draw from the same rating. The
@@ -143,8 +154,8 @@ def schedule_all(
         )
         removed = _clear_blocks(name)
         if not quiet:
-            print(f"         catalog {items} item(s)"
-                  + (f", cleared {removed} old block(s)" if removed > 0 else ""))
+            _say(f"         catalog {items} item(s)"
+                 + (f", cleared {removed} old block(s)" if removed > 0 else ""))
 
         try:
             schedule = LiquidSchedule(station_conf)
@@ -156,8 +167,8 @@ def schedule_all(
         used = getattr(schedule, "catalog", None)
         if not quiet and used is not None and hasattr(used, "repeats_prevented"):
             relaxed = sum(used.relaxations.values())
-            print(f"         ads     {used.repeats_prevented} at full cooldown, "
-                  f"{relaxed} relaxed, {used.starved} unconstrained")
+            _say(f"         ads     {used.repeats_prevented} at full cooldown, "
+                 f"{relaxed} relaxed, {used.starved} unconstrained")
         done += 1
 
     return done, problems
