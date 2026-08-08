@@ -568,6 +568,15 @@ def apply(lineup_path: Path, media_root: Path, ads_root: Path) -> list[tuple[Cha
     out: list[tuple[Channel, int]] = []
     conf_dir = VENDOR / "confs"
     conf_dir.mkdir(parents=True, exist_ok=True)
+
+    # Configs for channels this lineup no longer contains. Left behind, they are indis-
+    # tinguishable from live ones: the supervisor keeps generating schedules for them and the
+    # tuner keeps offering them, so a channel removed from the dial stays on the dial. Only
+    # ever our own `tub3_chN.json` — upstream's examples live in the same directory.
+    keep = {channel.station for channel in channels if channel.kind != "guide"}
+    for stale in conf_dir.glob("tub3_ch*.json"):
+        if stale.stem not in keep:
+            stale.unlink()
     for channel in channels:
         # The guide has no pool and no station config — guidecast renders and streams it.
         # Returned anyway so it appears in the dial the CLI prints: a channel missing from
