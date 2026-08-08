@@ -341,10 +341,22 @@ def main(argv: list[str] | None = None) -> int:
         if channels is None:
             return 0
 
-    lineup = Lineup([
-        LiquidChannel(number, name, args.db, name)
-        for number, name in channels
-    ])
+    # The guide is not discovered, because discovery reads the schedule and the guide has
+    # none — it is a view of everyone else's. Added explicitly, and only when there are other
+    # channels for it to list, since a guide to an empty dial is worse than no channel 2.
+    stations = [LiquidChannel(number, name, args.db, name) for number, name in channels]
+    guide = None
+    if stations:
+        from tuner.guide import music_for  # noqa: PLC0415
+        from tuner.schedule import GuideChannel  # noqa: PLC0415
+        from .lineup import GUIDE_CHANNEL  # noqa: PLC0415 - the one place the number lives
+        music_dir = load_settings().get("guide_music_dir")
+        tracks = music_for(Path(music_dir) if music_dir else None)
+        guide = GuideChannel(GUIDE_CHANNEL, "GUIDE", tracks)
+        print(f"    {GUIDE_CHANNEL:>3}  GUIDE  ({len(tracks)} track(s))"
+              + ("" if tracks else "  — silent; set guide_music_dir in settings"))
+
+    lineup = Lineup(([guide] if guide else []) + stations)
 
     drivers = build_drivers(player, headless=args.headless)
     print(f"  input: {', '.join(d.name for d in drivers)}")

@@ -354,6 +354,47 @@ class MpvPlayer:
 
         return TuneResult(True, latency_ms)
 
+    def play_music(self, paths: list[Path], *, timeout: float = 8.0) -> TuneResult:
+        """Loop a playlist of audio, for the guide channel.
+
+        Deliberately not `tune`. That one punches into a single file at an offset because a
+        scheduled programme is somewhere in the middle of itself when you arrive; the guide's
+        music is not on a timetable and nobody can tune in late to it. Handing mpv the whole
+        playlist with `loop-playlist` also means track durations never have to be probed —
+        which matters, because probing a folder of music over the NAS is exactly the kind of
+        wait that would sit between pressing 2 and seeing anything.
+
+        `keep-open` is off so the playlist advances by itself, and `force-window` is on
+        because an audio file presents no video and mpv would otherwise tear the window down
+        and take the listings overlay with it.
+        """
+        if not self.alive:
+            return TuneResult(False, 0.0, "mpv exited")
+        if not paths:
+            return TuneResult(False, 0.0, "no music")
+
+        start = time.perf_counter()
+        self._command(["set_property", "force-window", "yes"], wait=False)
+        self._command(["set_property", "keep-open", "no"], wait=False)
+        self._command(["set_property", "loop-playlist", "inf"], wait=False)
+
+        response = self._command(["loadfile", str(paths[0]), "replace"], timeout=timeout)
+        if response is not None and response.get("error") not in (None, "success"):
+            return TuneResult(False, 0.0, str(response.get("error")))
+        for extra in paths[1:]:
+            self._command(["loadfile", str(extra), "append"], wait=False)
+
+        self._command(["set_property", "pause", False], wait=False)
+        started = self._wait_for_event("playback-restart", timeout)
+        latency_ms = (time.perf_counter() - start) * 1000.0
+        return TuneResult(started, latency_ms, None if started else "no playback-restart")
+
+    def stop_music(self) -> None:
+        """Undo `play_music`, so a scheduled channel does not inherit its looping."""
+        if not self.alive:
+            return
+        self._command(["set_property", "loop-playlist", "no"], wait=False)
+
     # The coordinate space overlay ASS is authored in. Passing 0,0 here lets mpv choose,
     # which means the same menu renders at wildly different sizes depending on the display —
     # enormous on a retina panel, unreadable on a CRT. Declaring the space explicitly makes

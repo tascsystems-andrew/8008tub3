@@ -108,6 +108,14 @@ class Box:
         self._pending_digits = ""
         self._digit_deadline = 0.0
         self.last_latency_ms: float = 0.0
+        self._guide = None
+        self._guide_rows: list = []
+        self._guide_rows_at = 0.0
+
+    # How long a set of listings rows stays good for. Rebuilding them queries every channel's
+    # schedule across ninety minutes; the scroll is redrawn far more often than this, because
+    # that part is arithmetic.
+    GUIDE_ROWS_TTL = 20.0
 
     # ---------- tuning ----------
 
@@ -120,6 +128,17 @@ class Box:
         a moment ago, and saying so every time a programme starts is the box talking to
         itself. Nothing in the schedule is a channel change.
         """
+        if getattr(self.lineup.get(channel), "is_guide", False):
+            self._tune_guide(channel, announce=announce)
+            return
+
+        # Leaving the guide: undo its looping playlist, or the next channel inherits it and
+        # repeats one programme forever.
+        if self._guide is not None:
+            self.player.stop_music()
+            self.player.hide_overlay(overlay_id=4)
+            self._guide = None
+
         airing = self.lineup.now(channel, time.time())
         if airing is None or airing.off_air:
             # Dead air. A real station showed a sign-off card rather than a black screen.
@@ -146,6 +165,52 @@ class Box:
         self.bug = BugState(airing=airing, shown_at=shown_at)
         self._redraw()
 
+    def _tune_guide(self, channel: int, *, announce: bool = True) -> None:
+        """Put the listings up, with music under them.
+
+        The bug is deliberately not shown here. It exists to tell you what channel you are on
+        and what is playing, and the guide is a full screen already saying both — the row for
+        channel 2 is highlighted and the header carries the network name.
+        """
+        from .guide import Guide, rows_from_lineup
+
+        station = self.lineup.get(channel)
+        self.player.hide_overlay(overlay_id=2)
+        self.player.hide_overlay(overlay_id=3)
+        music = list(getattr(station, "music", []) or [])
+        if music:
+            self.player.play_music(music)
+        self.channel = channel
+        self.bug = BugState()
+        self._guide = Guide(guide_channel=channel,
+                            network=getattr(station, "name", "BOOBTUBE"))
+        self._guide_rows = []
+        self._guide_rows_at = 0.0
+        self._redraw_guide()
+
+    def _redraw_guide(self) -> None:
+        """One frame of the listings.
+
+        The rows are recomputed on a slow timer and the scroll on every tick. Rebuilding rows
+        means asking every channel what is on across a 90-minute window, which is a schedule
+        query per channel per step — far too much to repeat four times a second, and it cannot
+        change meaningfully between two ticks anyway. The scroll position is arithmetic.
+        """
+        if self._guide is None:
+            return
+        from .guide import rows_from_lineup
+
+        now = time.time()
+        if not self._guide_rows or now - self._guide_rows_at > self.GUIDE_ROWS_TTL:
+            try:
+                self._guide_rows = rows_from_lineup(self.lineup, now, self.channel)
+            except Exception:  # noqa: BLE001 - a broken row must not blank the screen
+                self._guide_rows = self._guide_rows or []
+            self._guide_rows_at = now
+        if not self._guide_rows:
+            return
+        self.player.show_overlay(self._guide.render_ass(self._guide_rows, now), overlay_id=4)
+
     def surf(self, delta: int) -> None:
         self.tune(self.lineup.surf(self.channel, delta))
 
@@ -167,6 +232,11 @@ class Box:
             self.player.show_overlay(self.menu.render_ass(), overlay_id=1)
             return
         self.player.hide_overlay(overlay_id=1)
+        if self._guide is not None:
+            # The listings are the picture on this channel; the bug would be furniture on top
+            # of furniture. Repaint them, since leaving the menu just wiped the frame.
+            self._redraw_guide()
+            return
         if self.bug.visible and self.bug.airing:
             self.player.show_overlay(render_bug(self.bug.airing), overlay_id=3)
         else:
@@ -243,6 +313,13 @@ class Box:
                     if self.mode is Mode.WATCH and not self.bug.visible and self.bug.airing:
                         self.bug.airing = None
                         self._redraw()
+                    if self._guide is not None:
+                        # The listings scroll, so this one *does* redraw every tick — 4 Hz
+                        # against 22 px/sec is about five pixels a step, which reads as
+                        # motion rather than as stepping. The menu still wins the screen.
+                        if self.mode is Mode.WATCH:
+                            self._redraw_guide()
+                        continue
                     self._advance_if_ended()
         except KeyboardInterrupt:
             self.running = False
