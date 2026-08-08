@@ -140,6 +140,18 @@ def audit(channels: list[Channel]) -> list[str]:
     """
     from .manifest import classify
 
+    # Plex has already matched the library against the standard databases and knows the
+    # broadcast rating, which beats any guess made from a folder name. Optional: the audit
+    # must still work, and still refuse, on a box where Plex is not configured.
+    plex_index: dict = {}
+    try:
+        from .plex import from_config, path_index
+        client = from_config()
+        if client is not None:
+            plex_index = path_index(client.library())
+    except Exception:  # noqa: BLE001 - Plex being unreachable must not disable the guard
+        plex_index = {}
+
     problems: list[str] = []
     for channel in channels:
         if channel.rating not in ("kids", "family"):
@@ -148,6 +160,19 @@ def audit(channels: list[Channel]) -> list[str]:
             for folder in folders:
                 path = Path(folder)
                 rating, why = classify(path.parent.name, path.name, path)
+
+                from .plex import lookup as plex_lookup
+                item = plex_lookup(plex_index, path) if plex_index else None
+                if item is not None:
+                    from .plex import classify_rating
+                    plex_rating, plex_why = classify_rating(item.content_rating)
+                    # Take the stricter of the two, never the more permissive. Where they
+                    # disagree, being conservative costs a cartoon; being wrong costs the
+                    # one thing this check exists to prevent.
+                    order = {"kids": 0, "family": 1, "adult": 2, "late": 2}
+                    if order.get(plex_rating, 2) >= order.get(rating, 2):
+                        rating, why = plex_rating, plex_why
+
                 if rating != "kids":
                     problems.append(
                         f"channel {channel.number} ({channel.name!r}) is rated "
