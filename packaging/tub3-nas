@@ -1,0 +1,329 @@
+#!/usr/bin/env python3
+"""Mount a NAS share, as root, on behalf of the settings page.
+
+"Point at your media" cannot mean "ssh in and write a credentials file". But mounting is
+root's job and the settings server is deliberately not root, so something has to cross that
+line. This is that something, and it is written to be the *only* thing the web user can do
+as root.
+
+The shape of the trust boundary:
+
+  - Reads its request as JSON on **stdin**, never argv. Anything in argv is visible to every
+    user on the box via `ps`, and one of the fields here is a password.
+  - Accepts four verbs and nothing else. There is no "run this command" path.
+  - Mounts only under /mnt/tub3, only read-only, only nosuid/nodev/noexec. A NAS full of
+    media has no business supplying executables to this machine.
+  - Validates the server and share against a strict pattern before they reach a command
+    line, so a share named `; rm -rf /` is rejected rather than escaped.
+  - Writes credentials 0600 root-only, and never prints them back. `status` returns the
+    username but never the password — the settings page can show you who it connects as
+    without being able to read the secret back out over HTTP.
+
+Invoked as:  sudo /usr/local/sbin/tub3-nas   with JSON on stdin.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+MOUNT_BASE = Path("/mnt/tub3")
+CRED_DIR = Path("/etc/tub3")
+FSTAB = Path("/etc/fstab")
+MARKER = "# tub3-nas"
+
+# Hostnames, IPv4, and share names. Deliberately strict: these end up on a mount command
+# line, and a whitelist is the only validation that stays correct when the escaping rules
+# change underneath you.
+HOST_RE = re.compile(r"^[A-Za-z0-9._-]{1,253}$")
+SHARE_RE = re.compile(r"^[A-Za-z0-9 ._$-]{1,80}$")
+SUBPATH_RE = re.compile(r"^[A-Za-z0-9 ._/-]{0,255}$")
+
+# cache=loose and a large rsize matter over a high-latency link — this box streams video
+# across a site-to-site VPN, where per-request round trips cost more than bandwidth does.
+# actimeo trades metadata freshness for far less chatter; media files do not change.
+MOUNT_OPTS = ("ro,nosuid,nodev,noexec,iocharset=utf8,"
+              "cache=loose,actimeo=60,rsize=1048576,wsize=1048576")
+VERSIONS = ("3.1.1", "3.0", "2.1")
+
+
+def fail(message: str, **extra) -> None:
+    print(json.dumps({"ok": False, "error": message, **extra}))
+    sys.exit(0)          # the caller reads JSON; a non-zero exit tells it nothing extra
+
+
+def ok(**payload) -> None:
+    print(json.dumps({"ok": True, **payload}))
+    sys.exit(0)
+
+
+def _safe(server: str, share: str, subpath: str = "") -> tuple[str, str, str]:
+    if not HOST_RE.match(server or ""):
+        fail("That server name is not a valid hostname or IP address.")
+    if not SHARE_RE.match(share or ""):
+        fail("That share name contains characters a share name cannot have.")
+    if not SUBPATH_RE.match(subpath or ""):
+        fail("That folder path contains characters it cannot have.")
+    # The character whitelist alone is not enough: '.' and '/' are both legal in a folder
+    # name, so "../../etc" satisfies it. The subpath is joined to the mount point, so that
+    # is a traversal straight out of the share — and the resulting path is handed back to
+    # the settings page as a media directory.
+    clean = (subpath or "").strip("/")
+    if any(part == ".." for part in clean.split("/")):
+        fail("That folder path tries to climb outside the share.")
+    return server, share, clean
+
+
+def _inside(base: Path, target: Path) -> bool:
+    """Belt and braces: after resolving symlinks, is target still under base?
+
+    The check above rejects the obvious spelling. This catches the rest — a symlink inside
+    the share pointing at /etc resolves outside it, and no amount of string validation on
+    the way in would have seen that coming.
+    """
+    try:
+        return target.resolve().is_relative_to(base.resolve())
+    except (OSError, ValueError):
+        return False
+
+
+def _cred_path(share: str) -> Path:
+    return CRED_DIR / f"nas-{re.sub(r'[^A-Za-z0-9]', '_', share)}.cred"
+
+
+def _mount_point(share: str) -> Path:
+    return MOUNT_BASE / re.sub(r"[^A-Za-z0-9]", "_", share)
+
+
+def _write_creds(share: str, username: str, password: str, domain: str) -> Path:
+    CRED_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path = _cred_path(share)
+    lines = [f"username={username}", f"password={password}"]
+    if domain:
+        lines.append(f"domain={domain}")
+    # Create with the right mode from the start rather than chmod after: between open and
+    # chmod the file is briefly world-readable, and this file is a password.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as handle:
+        handle.write("\n".join(lines) + "\n")
+    return path
+
+
+def _is_mounted(point: Path) -> bool:
+    return subprocess.run(["mountpoint", "-q", str(point)]).returncode == 0
+
+
+def do_list(req: dict) -> None:
+    """Which shares does this server offer to these credentials?
+
+    Typing a share name from memory is a guessing game; picking from a list is not.
+    """
+    server, _, _ = _safe(req.get("server", ""), "x")
+    if not shutil.which("smbclient"):
+        fail("smbclient is not installed — run pi_setup.sh again.")
+
+    user = req.get("username") or ""
+    password = req.get("password") or ""
+    args = ["smbclient", "-L", f"//{server}", "-g"]
+    if user:
+        args += ["-U", user]
+        env = {**os.environ, "PASSWD": password}
+    else:
+        args += ["-N"]
+        env = dict(os.environ)
+
+    result = subprocess.run(args, capture_output=True, text=True, timeout=25, env=env)
+    shares = []
+    for line in result.stdout.splitlines():
+        parts = line.split("|")
+        if len(parts) >= 2 and parts[0] == "Disk":
+            name = parts[1]
+            if not name.endswith("$"):        # hide admin shares; they hold no television
+                shares.append(name)
+    if not shares:
+        detail = (result.stderr or result.stdout or "").strip().splitlines()
+        hint = detail[-1] if detail else "no shares returned"
+        fail(f"Could not list shares: {hint}")
+    ok(shares=sorted(shares))
+
+
+def do_mount(req: dict) -> None:
+    server, share, subpath = _safe(req.get("server", ""), req.get("share", ""),
+                                   req.get("subpath", ""))
+    username = req.get("username") or ""
+    password = req.get("password") or ""
+    domain = req.get("domain") or ""
+
+    if not shutil.which("mount.cifs"):
+        fail("cifs-utils is not installed — run pi_setup.sh again.")
+
+    point = _mount_point(share)
+    point.mkdir(parents=True, exist_ok=True)
+    if _is_mounted(point):
+        subprocess.run(["umount", "-l", str(point)], capture_output=True)
+
+    cred = _write_creds(share, username, password, domain)
+    # The mount is owned by the user who runs the tuner, not root, so the tuner can read it
+    # without being root itself.
+    owner = req.get("owner") or "andrew"
+    try:
+        import pwd
+        uid = pwd.getpwnam(owner).pw_uid
+        gid = pwd.getpwnam(owner).pw_gid
+    except (ImportError, KeyError):
+        uid = gid = 1000
+
+    last = ""
+    for version in VERSIONS:
+        opts = (f"credentials={cred},{MOUNT_OPTS},vers={version},"
+                f"uid={uid},gid={gid},file_mode=0444,dir_mode=0555")
+        result = subprocess.run(
+            ["mount", "-t", "cifs", f"//{server}/{share}", str(point), "-o", opts],
+            capture_output=True, text=True, timeout=45,
+        )
+        if result.returncode == 0:
+            _persist(server, share, cred, point, version, uid, gid)
+            target = point / subpath if subpath else point
+            if subpath and not target.exists():
+                fail(f"Mounted, but there is no folder '{subpath}' inside {share}.",
+                     mount_point=str(point))
+            if not _inside(point, target):
+                fail("That folder resolves to somewhere outside the share.",
+                     mount_point=str(point))
+            ok(mount_point=str(point), path=str(target), version=version,
+               free_gb=_free_gb(point))
+        last = (result.stderr or "").strip().splitlines()[-1:] or [""]
+        last = last[0]
+        # A credentials failure will not be fixed by trying an older protocol.
+        if "13" in last or "denied" in last.lower():
+            break
+
+    fail(_explain(last), detail=last)
+
+
+def _explain(error: str) -> str:
+    """Turn mount.cifs's error numbers into something actionable."""
+    low = (error or "").lower()
+    if "13" in low or "permission denied" in low:
+        return "The server refused those credentials. Check the username and password."
+    if "112" in low or "host is down" in low:
+        return ("The server did not answer. Check the address, and that this box can reach "
+                "it — a VPN that is down looks exactly like this.")
+    if "2" in low and "no such" in low:
+        return "That share does not exist on this server."
+    if "unable to find suitable address" in low:
+        return "That hostname did not resolve. Try the IP address instead."
+    return error or "The mount failed and gave no reason."
+
+
+def _free_gb(point: Path) -> float:
+    try:
+        stat = os.statvfs(point)
+        return round(stat.f_bavail * stat.f_frsize / 1e9, 1)
+    except OSError:
+        return 0.0
+
+
+def _persist(server: str, share: str, cred: Path, point: Path,
+             version: str, uid: int, gid: int) -> None:
+    """Survive a reboot. A television that forgets its library overnight is broken."""
+    # fstab separates fields on whitespace, so a space in the mount point must be escaped
+    # as \040. Built outside the f-string: Python 3.11 rejects a backslash inside one, and
+    # the Pi runs 3.11.
+    escaped_point = str(point).replace(" ", "\\040")
+    line = (f"//{server}/{share} {escaped_point} cifs "
+            f"credentials={cred},{MOUNT_OPTS},vers={version},uid={uid},gid={gid},"
+            f"file_mode=0444,dir_mode=0555,"
+            # _netdev and nofail together: wait for the network, and never make a missing
+            # NAS a boot failure. An appliance that drops to a rescue prompt because a
+            # server is off is worse than one that comes up with no channels.
+            f"_netdev,nofail,x-systemd.automount,x-systemd.mount-timeout=30 0 0 {MARKER}")
+    try:
+        existing = FSTAB.read_text().splitlines()
+    except OSError:
+        return
+    kept = [ln for ln in existing if not (MARKER in ln and f"//{server}/{share} " in ln)]
+    kept.append(line)
+    FSTAB.write_text("\n".join(kept).rstrip() + "\n")
+    subprocess.run(["systemctl", "daemon-reload"], capture_output=True)
+
+
+def do_status(_req: dict) -> None:
+    """What is mounted, and as whom. Never what the password is."""
+    mounts = []
+    if MOUNT_BASE.exists():
+        for point in sorted(MOUNT_BASE.iterdir()):
+            if not point.is_dir():
+                continue
+            entry = {"mount_point": str(point), "mounted": _is_mounted(point)}
+            if entry["mounted"]:
+                entry["free_gb"] = _free_gb(point)
+                try:
+                    entry["top_level"] = sorted(
+                        p.name for p in point.iterdir() if p.is_dir() and not
+                        p.name.startswith(".")
+                    )[:40]
+                except OSError:
+                    entry["top_level"] = []
+            mounts.append(entry)
+    # Report the username so the page can show the connection, without exposing the secret.
+    users = {}
+    if CRED_DIR.exists():
+        for cred in CRED_DIR.glob("nas-*.cred"):
+            try:
+                for line in cred.read_text().splitlines():
+                    if line.startswith("username="):
+                        users[cred.stem] = line.split("=", 1)[1]
+            except OSError:
+                continue
+    ok(mounts=mounts, usernames=users)
+
+
+def do_unmount(req: dict) -> None:
+    _, share, _ = _safe("localhost", req.get("share", ""))
+    point = _mount_point(share)
+    subprocess.run(["umount", "-l", str(point)], capture_output=True)
+    try:
+        kept = [ln for ln in FSTAB.read_text().splitlines()
+                if not (MARKER in ln and f"/{share} " in ln)]
+        FSTAB.write_text("\n".join(kept).rstrip() + "\n")
+    except OSError:
+        pass
+    cred = _cred_path(share)
+    if cred.exists():
+        cred.unlink()
+    ok(unmounted=str(point))
+
+
+ACTIONS = {"list": do_list, "mount": do_mount, "status": do_status, "unmount": do_unmount}
+
+
+def main() -> int:
+    if os.geteuid() != 0:
+        fail("tub3-nas must run as root.")
+    try:
+        request = json.loads(sys.stdin.read() or "{}")
+    except json.JSONDecodeError:
+        fail("Malformed request.")
+    if not isinstance(request, dict):
+        fail("Malformed request.")
+
+    action = ACTIONS.get(str(request.get("action", "")))
+    if action is None:
+        fail("Unknown action.")
+    try:
+        action(request)
+    except subprocess.TimeoutExpired:
+        fail("The server took too long to answer.")
+    except Exception as exc:  # noqa: BLE001 - the caller needs JSON, never a traceback
+        fail(f"{type(exc).__name__}: {exc}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

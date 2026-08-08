@@ -103,6 +103,29 @@ RestartSec=3
 WantedBy=multi-user.target
 SERVICE
 
+# The settings page is its own service, deliberately. It must be reachable when the
+# television is *not* working — which is exactly when you need it — so it cannot be a
+# thread inside the process that is failing.
+cat > /etc/systemd/system/tub3-web.service <<SERVICE
+[Unit]
+Description=8008TUB3 settings page
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=$RUN_USER
+WorkingDirectory=$REPO
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -m tub3.web --host 0.0.0.0 --port 8008
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+
 cat > /etc/systemd/system/tub3-build.service <<SERVICE
 [Unit]
 Description=8008TUB3 schedule build
@@ -128,8 +151,31 @@ Persistent=true
 WantedBy=timers.target
 TIMER
 
+# --------------------------------------------------------------- network storage ---
+say "Installing the storage helper"
+apt-get install -y --no-install-recommends cifs-utils smbclient
+
+# Mounting is root's job and the settings server is an unauthenticated HTTP listener, so it
+# must not be root. This helper is the only bridge: one program, four verbs, no shell path.
+install -m 0755 "$REPO/packaging/tub3-nas" /usr/local/sbin/tub3-nas
+
+# Scoped to exactly that binary. Not a general NOPASSWD grant — the web user gets the
+# ability to mount a share, and nothing else.
+cat > /etc/sudoers.d/tub3-nas <<SUDO
+$RUN_USER ALL=(root) NOPASSWD: /usr/local/sbin/tub3-nas
+SUDO
+chmod 0440 /etc/sudoers.d/tub3-nas
+# A malformed sudoers file locks everyone out of sudo, so validate before trusting it.
+if ! visudo -c -f /etc/sudoers.d/tub3-nas >/dev/null 2>&1; then
+    rm -f /etc/sudoers.d/tub3-nas
+    warn "sudoers snippet was rejected and has been removed — NAS mounting from the web UI"
+    warn "will not work. Everything else is unaffected."
+fi
+mkdir -p /mnt/tub3
+
 systemctl daemon-reload
-systemctl enable tub3-tuner.service tub3-build.timer >/dev/null
+systemctl enable tub3-tuner.service tub3-web.service tub3-build.timer >/dev/null
+systemctl restart tub3-web.service >/dev/null 2>&1 || true
 
 # ------------------------------------------------------------------- sharing ---
 say "Setting up the drop share"
