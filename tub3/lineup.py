@@ -142,6 +142,17 @@ class Channel:
     def station(self) -> str:
         return f"tub3_ch{self.number}"
 
+    @property
+    def bump_tag(self) -> str:
+        """This channel's own bump pool.
+
+        Every station used to point at one shared `bump` directory, which was fine while its
+        only contents were generated placeholder cards reading CHANNEL 0. It stops being fine
+        the moment channels have identities: a shared pool means Sludge introduces The
+        Sopranos, and the whole point of a bumper is that it tells you where you are.
+        """
+        return f"{BUMP_TAG}-ch{self.number}"
+
     def default_tag(self) -> str:
         if self.dayparts:
             return self.dayparts[0].tag
@@ -371,7 +382,7 @@ def audit(channels: list[Channel]) -> list[str]:
     return problems
 
 
-def _iter_videos(folder: Path):
+def _iter_videos(folder: Path, *, sort: bool = True):
     """Every video file a source path contributes, whether it names a folder or one file.
 
     A series is a directory and a film is very often a bare file sitting in the library
@@ -379,14 +390,18 @@ def _iter_videos(folder: Path):
     the first, and `Path("film.mkv").rglob("*")` yields nothing at all, so naming a film
     directly produced an empty pool and no complaint.
 
-    Lazy, so a caller that only needs to know whether *anything* is there can stop after the
-    first hit. These walks are over SMB, and `Movies` is several thousand entries.
+    `sort` is not cosmetic. `sorted()` drains the whole generator before the loop it feeds
+    can run even once, so a sorted walk cannot short-circuit — a caller that only wants to
+    know whether *anything* is there would still stat every entry in the tree. Over CIFS that
+    is thousands of round trips to answer a question the first file already settles.
+    Pool building wants the deterministic order; the existence check must not pay for it.
     """
     if folder.is_file():
         if folder.suffix.lower() in VIDEO_SUFFIXES:
             yield folder
         return
-    for item in sorted(folder.rglob("*")):
+    walk = folder.rglob("*")
+    for item in sorted(walk) if sort else walk:
         if item.is_file() and not item.name.startswith(".") \
                 and item.suffix.lower() in VIDEO_SUFFIXES:
             yield item
@@ -397,7 +412,54 @@ def _sources_in(folder: Path) -> list[Path]:
 
 
 def _has_video(folder: Path) -> bool:
-    return next(_iter_videos(folder), None) is not None
+    return next(_iter_videos(folder, sort=False), None) is not None
+
+
+def build_bumps(media_root: Path, channel: Channel, bumpers: Path | None) -> int:
+    """Fill this channel's bump pool: its own clips first, generated cards as the fallback.
+
+    Upstream splits a bump directory by two literal subfolder names, `pre` and `post`, with
+    no config behind it. Channel idents go in `pre` — the classic placement is coming *out*
+    of a break and back into the programme, which is where a bumper does its actual job of
+    telling you what you are watching and on what.
+
+    Supplied clips are matched by filename prefix (`ch04-`), and anything named `extra-brb-`
+    is shared by every channel, since "we'll be right back" says nothing channel-specific.
+
+    The generated placeholder cards are only made when a channel has no clips of its own.
+    Mixing them means a real bumper competes with a card reading CHANNEL 4 in a system font,
+    and the card wins a third of the time.
+    """
+    from .cards import make_station_ids
+
+    pool = media_root / channel.bump_tag
+    pre = pool / "pre"
+    if pool.exists():
+        for stale in pool.rglob("*"):
+            if stale.is_symlink():
+                stale.unlink()
+    pre.mkdir(parents=True, exist_ok=True)
+
+    linked = 0
+    if bumpers and bumpers.exists():
+        prefixes = (f"ch{channel.number:02d}-", "extra-brb-")
+        for clip in sorted(bumpers.iterdir()):
+            if clip.suffix.lower() not in VIDEO_SUFFIXES:
+                continue
+            if not clip.name.lower().startswith(prefixes):
+                continue
+            link = pre / clip.name
+            if not link.exists():
+                try:
+                    link.symlink_to(clip.resolve())
+                except OSError:
+                    continue
+            linked += 1
+
+    if linked == 0:
+        made = make_station_ids(pool, channel.number, channel.name)
+        return sum(made.values())
+    return linked
 
 
 def _link_pool(media_root: Path, tag: str, folders: list[str],
@@ -485,7 +547,7 @@ def compile_station(channel: Channel, media_root: Path, *, pools: dict[str, str]
         "channel_number": channel.number,
         "network_type": "standard",
         "content_dir": str(media_root.resolve()),
-        "bump_dir": BUMP_TAG,
+        "bump_dir": channel.bump_tag,
         "commercial_free": commercial_tag is None,
         # Chapter-derived break points are discarded by anything other than "standard", so a
         # channel asking for "end" is explicitly saying its content has no act structure
@@ -519,10 +581,10 @@ def compile_station(channel: Channel, media_root: Path, *, pools: dict[str, str]
     return {"station_conf": conf}
 
 
-def apply(lineup_path: Path, media_root: Path, ads_root: Path) -> list[tuple[Channel, int]]:
+def apply(lineup_path: Path, media_root: Path, ads_root: Path,
+          bumpers: Path | None = None) -> list[tuple[Channel, int]]:
     """Build every pool and write every station config. Returns (channel, episode count)."""
     from .bootstrap import build_rating_pools
-    from .cards import make_station_ids
 
     media_root.mkdir(parents=True, exist_ok=True)
     channels = load(lineup_path)
@@ -549,7 +611,6 @@ def apply(lineup_path: Path, media_root: Path, ads_root: Path) -> list[tuple[Cha
         )
 
     pools = build_rating_pools(media_root, ads_root)
-    make_station_ids(media_root / BUMP_TAG, 0, "BoobTube")
 
     # A tag can be shared by several channels; build each pool once. Where two channels
     # define the same tag with different exclusions, take the union — excluding more is the
@@ -585,6 +646,7 @@ def apply(lineup_path: Path, media_root: Path, ads_root: Path) -> list[tuple[Cha
         if channel.kind == "guide":
             out.append((channel, 0))
             continue
+        build_bumps(media_root, channel, bumpers)
         conf = compile_station(channel, media_root, pools=pools)
         (conf_dir / f"{channel.station}.json").write_text(json.dumps(conf, indent=4))
         episodes = sum(built.get(tag, 0) for tag in channel.sources)
@@ -599,6 +661,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("lineup", type=Path, help="lineup JSON")
     ap.add_argument("--media-root", type=Path, required=True)
     ap.add_argument("--ads", type=Path, required=True)
+    ap.add_argument("--bumpers", type=Path,
+                    help="folder of station bumpers named chNN-*.mp4 and extra-brb-*.mp4")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
 
@@ -643,7 +707,7 @@ def main(argv: list[str] | None = None) -> int:
         print()
         return 0
 
-    results = apply(args.lineup, args.media_root, args.ads)
+    results = apply(args.lineup, args.media_root, args.ads, args.bumpers)
     print()
     written = 0
     for channel, episodes in results:
