@@ -48,71 +48,119 @@ def _readable(path: str) -> bool:
         return False
 
 
-def watch(device: str) -> int:
-    """Print every key press, and whether the box would understand it."""
-    try:
-        handle = open(device, "rb", buffering=0)
-    except OSError as exc:
-        print(f"\n  Cannot read {device}: {exc}")
+def all_event_nodes() -> list[str]:
+    """Every event node, not just the keyboard-ish ones.
+
+    `discover_evdev_devices` filters to devices advertising `kbd`, which is right for the
+    tuner — it is looking for something that can drive the box. It is wrong for diagnosis.
+    A presentation clicker routinely enumerates as *two* devices, a keyboard and a mouse,
+    and a button that arrives on the mouse node is invisible to the filtered list. Watching
+    only the keyboard node and concluding a button "does nothing" is the exact dead end
+    this module exists to prevent.
+    """
+    return sorted((str(p) for p in Path("/dev/input").glob("event*")),
+                  key=lambda p: int(p.rsplit("event", 1)[1]))
+
+
+def watch(devices: list[str], seconds: float | None = None) -> int:
+    """Print every key press across every device, and whether the box would understand it.
+
+    Watches all of them at once. `seconds` bounds the run so this can be driven from a
+    remote shell, where there is nobody at the keyboard to press Ctrl+C.
+    """
+    import select
+    import time
+
+    handles: dict[int, tuple[str, object]] = {}
+    denied: list[str] = []
+    for path in devices:
+        try:
+            handle = open(path, "rb", buffering=0)
+        except OSError:
+            denied.append(path)
+            continue
+        handles[handle.fileno()] = (path, handle)
+
+    if not handles:
+        print(f"\n  Cannot read any input device ({len(denied)} tried).")
         print("  Input devices need root: prefix the command with sudo.\n")
         return 1
 
-    print(f"\n  Watching {device}. Press buttons on your remote. Ctrl+C to stop.\n")
-    print(f"    {'keycode':<9} {'maps to':<10} {'note'}")
-    print("    " + "-" * 52)
+    names = {path: name for path, name in discover_evdev_devices()}
+    limit = f" for {seconds:g}s" if seconds else ""
+    print(f"\n  Watching {len(handles)} device(s){limit}. Press every button on the remote.\n")
+    for _, (path, _h) in sorted(handles.items()):
+        print(f"    {path:<20} {names.get(path, '')}")
+    if denied:
+        print(f"\n    ({len(denied)} not readable — run with sudo to include them)")
+    print(f"\n    {'device':<16} {'keycode':<9} {'maps to':<12} {'note'}")
+    print("    " + "-" * 66)
 
     seen: set[int] = set()
+    deadline = time.monotonic() + seconds if seconds else None
     try:
         while True:
-            data = handle.read(EVENT_SIZE)
-            if not data or len(data) < EVENT_SIZE:
-                break
-            _, _, etype, code, value = struct.unpack(EVENT_FORMAT, data)
-            if etype != EV_KEY or value != 1:      # key-down only
-                continue
+            timeout = None
+            if deadline is not None:
+                timeout = deadline - time.monotonic()
+                if timeout <= 0:
+                    break
+            ready, _, _ = select.select(list(handles), [], [], timeout)
+            for fd in ready:
+                path, handle = handles[fd]
+                data = handle.read(EVENT_SIZE)
+                if not data or len(data) < EVENT_SIZE:
+                    continue
+                _, _, etype, code, value = struct.unpack(EVENT_FORMAT, data)
+                if etype != EV_KEY or value != 1:      # key-down only
+                    continue
 
-            if code in EVDEV_DIGITS:
-                verb, note = f"digit {EVDEV_DIGITS[code]}", "optional — never required"
-            elif code in EVDEV_MAP:
-                verb, note = EVDEV_MAP[code].value, "recognised"
-            else:
-                verb, note = "—", "UNMAPPED: add to EVDEV_MAP in tuner/input.py"
-            flag = "" if code in seen else "  *"
-            seen.add(code)
-            print(f"    {code:<9} {verb:<10} {note}{flag}")
+                if code in EVDEV_DIGITS:
+                    verb, note = f"digit {EVDEV_DIGITS[code]}", "optional — never required"
+                elif code in EVDEV_MAP:
+                    verb, note = EVDEV_MAP[code].value, "recognised"
+                else:
+                    verb, note = "—", "UNMAPPED: add to EVDEV_MAP in tuner/input.py"
+                flag = "" if code in seen else "  *"
+                seen.add(code)
+                short = path.replace("/dev/input/", "")
+                print(f"    {short:<16} {code:<9} {verb:<12} {note}{flag}", flush=True)
     except KeyboardInterrupt:
         pass
     finally:
-        handle.close()
+        for _path, handle in handles.values():
+            handle.close()
 
     missing = [v for v in (Verb.UP, Verb.DOWN, Verb.SELECT, Verb.BACK)
                if not any(EVDEV_MAP.get(c) is v for c in seen)]
     print()
+    if not seen:
+        print("  Nothing arrived. The receiver may be unplugged, or the remote asleep —")
+        print("  most clickers power down and need a button held to wake.\n")
+        return 1
     if missing:
-        print("  Not seen yet: " + ", ".join(v.value for v in missing))
-        print("  All four are needed to drive the box from this device alone.\n")
-    else:
-        print("  All four verbs present — this remote can drive the box on its own.\n")
+        print("  Not seen: " + ", ".join(v.value for v in missing))
+        print("  All four are needed to drive the box from this remote alone.\n")
+        return 1
+    print("  All four verbs present — this remote can drive the box on its own.\n")
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="tub3.remote", description=__doc__)
     ap.add_argument("action", nargs="?", default="list", choices=["list", "watch"])
-    ap.add_argument("--device", help="/dev/input/eventN")
+    ap.add_argument("--device", help="/dev/input/eventN (default: watch all of them)")
+    ap.add_argument("--seconds", type=float,
+                    help="stop after N seconds, for driving this from a remote shell")
     args = ap.parse_args(argv)
 
     if args.action == "list":
         return list_devices()
 
-    device = args.device
-    if not device:
-        devices = discover_evdev_devices()
-        if not devices:
-            return list_devices()
-        device = devices[0][0]
-        print(f"  (no --device given, using {device})")
-    return watch(device)
+    devices = [args.device] if args.device else all_event_nodes()
+    if not devices:
+        return list_devices()
+    return watch(devices, seconds=args.seconds)
 
 
 if __name__ == "__main__":
