@@ -143,9 +143,14 @@ def schedule_all(
         # Counting links is a local directory walk over symlinks — no NAS traffic — and it is
         # a good enough proxy for how long the scan behind it will take.
         def weight(conf: dict) -> int:
-            root = Path(conf["content_dir"])
+            # `os.walk(followlinks=True)`, not `Path.rglob`: a station directory is entirely
+            # symlinks to the pools, and rglob does not descend through a symlinked
+            # directory. It counted the tags rather than the files, so a two-tag channel with
+            # a thousand episodes sorted ahead of a four-tag channel with two hundred and the
+            # ordering did the opposite of its job.
             try:
-                return sum(1 for _ in root.rglob("*"))
+                return sum(len(files) for _, _, files
+                           in os.walk(conf["content_dir"], followlinks=True))
             except OSError:
                 return 1 << 30
         wanted.sort(key=weight)
