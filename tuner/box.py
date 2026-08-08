@@ -279,10 +279,15 @@ class Box:
                 self.player.toggle_mute()
                 return
 
+            # UP goes to a *higher* channel number, which is the opposite of what the same
+            # key does in the menu. That is not an inconsistency to be tidied away: a cursor
+            # moves up a list toward the top, and a dial turns up toward channel 12. Every
+            # television ever made agrees, and this had the list convention applied to the
+            # dial — so the remote felt backwards while the menu felt right.
             if event.verb is Verb.UP:
-                self.surf(-1)
-            elif event.verb is Verb.DOWN:
                 self.surf(1)
+            elif event.verb is Verb.DOWN:
+                self.surf(-1)
             elif event.verb is Verb.SELECT:
                 self.mode = Mode.MENU
                 self.menu.visible = True
