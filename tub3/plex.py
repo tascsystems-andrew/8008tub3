@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import ssl
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -74,6 +75,19 @@ class PlexItem:
     episodes: int = 0
     minutes: float | None = None
     section: str = ""
+    # Plex's own id for the item, needed to ask it for the episodes underneath a show.
+    rating_key: str = ""
+
+
+@dataclass
+class PlexEpisode:
+    """One episode as Plex has it, with the file it lives in."""
+
+    show: str
+    title: str
+    season: int | None
+    episode: int | None
+    path: str = ""
 
 
 class PlexError(RuntimeError):
@@ -205,7 +219,45 @@ class Plex:
                 episodes=int(node.get("leafCount") or 0) or (1 if node.tag == "Video" else 0),
                 minutes=minutes,
                 section=section_title,
+                rating_key=node.get("ratingKey") or "",
             ))
+        return out
+
+    def episodes_of(self, item: PlexItem) -> list[PlexEpisode]:
+        """Every episode under one show, with season, number, title and file.
+
+        `/allLeaves` returns the whole series in a single response — season, episode number,
+        title and the file each one lives in. That matters: the obvious alternative is a
+        request per season or per episode, which for this library is thousands of round trips
+        and is why the episode title was being scraped out of the filename instead.
+
+        Failures are swallowed to an empty list on purpose. A missing episode title costs a
+        line on the bug; it must never be able to fail a schedule build.
+        """
+        if not item.rating_key:
+            return []
+        try:
+            root = self._get(f"/library/metadata/{item.rating_key}/allLeaves")
+        except PlexError:
+            return []
+
+        out: list[PlexEpisode] = []
+        for node in root.findall("Video"):
+            title = node.get("title") or ""
+            season = node.get("parentIndex")
+            number = node.get("index")
+            for media in node.findall("Media"):
+                for part in media.findall("Part"):
+                    path = part.get("file")
+                    if not path:
+                        continue
+                    out.append(PlexEpisode(
+                        show=item.title,
+                        title=title,
+                        season=int(season) if (season or "").isdigit() else None,
+                        episode=int(number) if (number or "").isdigit() else None,
+                        path=path,
+                    ))
         return out
 
     def library(self) -> list[PlexItem]:
@@ -230,9 +282,26 @@ def from_config() -> Plex | None:
 SUFFIX_DEPTHS = (3, 2)
 
 
+def _norm(text: str) -> str:
+    """One spelling of a name, so two systems can agree it is the same name.
+
+    The share hands back NFD — `Poke` plus a combining acute — and Plex hands back NFC, where
+    the same accent is a single codepoint. The strings look identical in any terminal, compare
+    unequal in Python, and so a dict keyed on one never matches a lookup with the other.
+    `Pokémon` simply had no Plex match and nobody could see why.
+
+    This matters beyond a missing episode title: `path_index` feeds the *safety audit*, whose
+    whole job is to take Plex's rating as a second opinion over a guess from the folder name.
+    An accented show silently lost that second opinion, and losing it quietly is precisely the
+    failure mode the audit exists to prevent.
+    """
+    return unicodedata.normalize("NFC", text).lower()
+
+
 def _suffixes(path: Path) -> list[str]:
     parts = [p for p in path.parts if p not in ("/", "")]
-    return ["/".join(parts[-depth:]) for depth in SUFFIX_DEPTHS if len(parts) >= depth]
+    return [_norm("/".join(parts[-depth:]))
+            for depth in SUFFIX_DEPTHS if len(parts) >= depth]
 
 
 def path_index(items: list[PlexItem]) -> dict[str, PlexItem]:
@@ -276,6 +345,94 @@ def lookup(index: dict[str, PlexItem], path: Path) -> PlexItem | None:
         item = index.get(key)
         if item is not None:
             return item
+    return None
+
+
+# An episode is a *file*, and unlike a folder its basename is already close to unique — a
+# release name carries the show, season and episode in it. So one component is allowed here
+# where `path_index` refuses it: the failure that rule guards against is a folder called
+# "Season 1" matching the wrong series, and no such collision exists between two files called
+# `PAW.Patrol.S01E01.1080p.WEB.x264-CRiMSON-postbot.mkv`. Ambiguity is still resolved by
+# removal, so the rare genuine clash simply falls through to the filename parser.
+EPISODE_DEPTHS = (3, 2, 1)
+
+
+def _episode_keys(path: Path) -> list[str]:
+    """Case-folded, because Plex and the filesystem disagree about capitalisation.
+
+    Observed directly: Plex reports `/Media/Kids TV/PAW Patrol/...` for files that live in
+    `Kids TV/Paw Patrol/` on the share. The basename matches either way, so the deepest key
+    would have rescued it by luck — folding makes the folder keys work too, and costs nothing
+    on a library where two files differing only in case would be a problem in itself.
+    """
+    parts = [p for p in path.parts if p not in ("/", "")]
+    return [_norm("/".join(parts[-depth:]))
+            for depth in EPISODE_DEPTHS if len(parts) >= depth]
+
+
+def fill_show_paths(plex: "Plex", items: list[PlexItem]) -> int:
+    """Give every show the folder it actually lives in. Returns how many were filled.
+
+    A show's own element in `/library/sections/{key}/all` carries no `Location` on this
+    server — `Mr. Bean` comes back with 19 episodes and an empty path list — so `path_index`
+    had nothing to key a series on and `lookup` returned None for every TV folder ever asked
+    about. The audit went on working, quietly, on the folder-name rule alone: the Plex second
+    opinion it is built around was absent for all nine television channels and said so
+    nowhere. That is the exact shape of failure the audit exists to prevent, hiding inside
+    the audit.
+
+    The episodes do carry real paths, so the show's folder is their common parent. Derived
+    rather than requested because there is no endpoint that will simply answer the question.
+    """
+    filled = 0
+    for item in items:
+        if item.kind != "show" or item.paths:
+            continue
+        folders = {str(Path(episode.path).parent) for episode in plex.episodes_of(item)
+                   if episode.path}
+        if not folders:
+            continue
+        # Episodes usually sit in per-season subfolders, so the season directories are the
+        # common parent, and the show directory is one above that. Keep both: the deeper
+        # keys are harmless and the shallower one is what a lineup source names.
+        item.paths = sorted(folders | {str(Path(f).parent) for f in folders})
+        filled += 1
+    return filled
+
+
+def episode_index(plex: "Plex", items: list[PlexItem] | None = None) -> dict[str, PlexEpisode]:
+    """Map path tails to episodes, one request per show.
+
+    Same container-boundary problem as `path_index` and the same answer: Plex reports the
+    paths it sees inside Docker, we see them on a CIFS mount, and only the tails agree.
+    """
+    if items is None:
+        items = plex.library()
+
+    index: dict[str, PlexEpisode] = {}
+    ambiguous: set[str] = set()
+
+    for item in items:
+        if item.kind != "show":
+            continue
+        for episode in plex.episodes_of(item):
+            for key in _episode_keys(Path(episode.path)):
+                existing = index.get(key)
+                if existing is not None and existing.path != episode.path:
+                    ambiguous.add(key)
+                    continue
+                index[key] = episode
+
+    for key in ambiguous:
+        index.pop(key, None)
+    return index
+
+
+def lookup_episode(index: dict[str, PlexEpisode], path: Path) -> PlexEpisode | None:
+    for key in _episode_keys(path):
+        episode = index.get(key)
+        if episode is not None:
+            return episode
     return None
 
 

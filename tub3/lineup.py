@@ -323,10 +323,16 @@ def audit(channels: list[Channel]) -> list[str]:
     # must still work, and still refuse, on a box where Plex is not configured.
     plex_index: dict = {}
     try:
-        from .plex import from_config, path_index
+        from .plex import fill_show_paths, from_config, path_index
         client = from_config()
         if client is not None:
-            plex_index = path_index(client.library())
+            library = client.library()
+            # Measured on this server: 0 of 77 shows carried a path of their own, so every
+            # television source resolved to nothing and this audit had been running on the
+            # folder-name rule alone. Costs one request per show and buys back the second
+            # opinion the whole check is built around.
+            fill_show_paths(client, library)
+            plex_index = path_index(library)
     except Exception:  # noqa: BLE001 - Plex being unreachable must not disable the guard
         plex_index = {}
 
