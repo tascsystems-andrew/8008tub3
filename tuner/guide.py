@@ -72,8 +72,26 @@ class Row:
     slots: list[Slot] = field(default_factory=list)
 
 
+# The festive season, Andrew's dates: 15 November through 1 January inclusive. Not "December"
+# — a guide that turns Christmassy on the 1st of December has missed the half of the season
+# that everyone actually decorates for, and one that stops on the 31st stops a day early.
+FESTIVE_FROM = (11, 15)
+FESTIVE_TO = (1, 1)
+
+
+def is_festive(when: float | None = None) -> bool:
+    stamp = datetime.fromtimestamp(time.time() if when is None else when)
+    month, day = stamp.month, stamp.day
+    if month == FESTIVE_FROM[0]:
+        return day >= FESTIVE_FROM[1]
+    if month == FESTIVE_TO[0]:
+        return day <= FESTIVE_TO[1]
+    # Everything strictly between the two months — December, and nothing else.
+    return month > FESTIVE_FROM[0] or month < FESTIVE_TO[0]
+
+
 def music_for(folder: Path | None, when: float | None = None) -> list[Path]:
-    """The playlist. In December, a Christmas subfolder wins if there is one.
+    """The playlist. In the festive window, a Christmas subfolder wins if there is one.
 
     Returns [] when nothing is configured, and the caller plays the guide silent rather
     than refusing to show it — the listings are the point, the music is the atmosphere.
@@ -84,8 +102,7 @@ def music_for(folder: Path | None, when: float | None = None) -> list[Path]:
     if not root.is_dir():
         return []
 
-    when = when if when is not None else time.time()
-    if datetime.fromtimestamp(when).month == 12:
+    if is_festive(when):
         for name in ("Christmas", "christmas", "Xmas", "Holiday"):
             festive = root / name
             if festive.is_dir():
@@ -93,12 +110,15 @@ def music_for(folder: Path | None, when: float | None = None) -> list[Path]:
                 if tracks:
                     return tracks
 
-    return _audio_in(root)
+    # Not `rglob` at the top level, or the Christmas folder would be swept into the ordinary
+    # playlist and play carols in July.
+    return _audio_in(root, recurse=False)
 
 
-def _audio_in(folder: Path) -> list[Path]:
+def _audio_in(folder: Path, *, recurse: bool = True) -> list[Path]:
     try:
-        return sorted(p for p in folder.rglob("*")
+        found = folder.rglob("*") if recurse else folder.iterdir()
+        return sorted(p for p in found
                       if p.is_file() and p.suffix.lower() in AUDIO_SUFFIXES
                       and not p.name.startswith("."))
     except OSError:
