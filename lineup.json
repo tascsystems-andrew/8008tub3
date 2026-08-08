@@ -129,6 +129,14 @@
         "films": [
           "/mnt/tub3/Media/mshare/Movies"
         ]
+      },
+      "exclude": {
+        "films": [
+          "2160p",
+          "uhd",
+          ".4k.",
+          "_4k"
+        ]
       }
     },
     {
@@ -147,7 +155,11 @@
           "princess.mononoke",
           "ferris.buellers",
           "pirates.of.the.caribbean",
-          "plex versions"
+          "plex versions",
+          "2160p",
+          "uhd",
+          ".4k.",
+          "_4k"
         ]
       }
     },
