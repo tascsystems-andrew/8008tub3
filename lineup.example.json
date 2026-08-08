@@ -1,0 +1,64 @@
+{
+  "channels": [
+    {
+      "number": 2,
+      "name": "GUIDE",
+      "kind": "guide",
+      "rating": "kids"
+    },
+    {
+      "number": 3,
+      "name": "EVERYTHING",
+      "rating": "family",
+      "increment": 30,
+      "sources": {
+        "shows-morning": [
+          "/media/tv/A Preschool Show",
+          "/media/tv/Another One"
+        ],
+        "shows-evening": [
+          "/media/tv/A Sitcom",
+          "/media/tv/Another Sitcom"
+        ]
+      },
+      "dayparts": [
+        {
+          "hours": "6-17",
+          "tag": "shows-morning"
+        },
+        {
+          "hours": "17-6",
+          "tag": "shows-evening"
+        }
+      ]
+    },
+    {
+      "number": 4,
+      "name": "SATURDAY AM",
+      "rating": "kids",
+      "increment": 30,
+      "sources": {
+        "shows-sat": [
+          "/media/tv/Your Cartoon Here"
+        ]
+      }
+    },
+    {
+      "number": 6,
+      "name": "THE PICTURES",
+      "rating": "late",
+      "increment": 120,
+      "sources": {
+        "films": [
+          "/media/movies"
+        ]
+      },
+      "exclude": {
+        "films": [
+          "2160p",
+          "uhd"
+        ]
+      }
+    }
+  ]
+}
