@@ -158,6 +158,13 @@ cat <<NEXT
     3.  python3 -m tub3.remote list          find your remote
     4.  open http://\$(hostname -I | cut -d' ' -f1):8008   point at your media
 
+  Then, once it all works and not before:
+
+    sudo bash packaging/silent_boot.sh       power on -> mark -> television
+
+  That hides the boot diagnostics, which are the thing you want visible while you
+  are still finding out whether it boots. It has an --undo.
+
   The tuner starts on boot. Drop commercials into Unsorted over the network —
   they count as Late, so nothing unsorted can reach a kids channel.
 
