@@ -5,3 +5,12 @@ __pycache__/
 adsplice-report.json
 vendor/
 .venv-build/
+settings.json
+plex.json
+titles.json
+runtime/
+media/
+bumpers/
+guide-music/
+*.log
+.DS_Store
