@@ -80,6 +80,13 @@ cat > /etc/systemd/system/tub3-tuner.service <<SERVICE
 Description=8008TUB3 tuner
 After=network-online.target
 Wants=network-online.target
+# A television comes back on its own. Never give up restarting it.
+#
+# This key belongs in [Unit], not [Service]. systemd parses it there and silently ignores
+# it anywhere else — logging "Unknown key" once per boot and then applying the default,
+# which gives up after 5 restarts in 10 seconds. For an appliance that is the whole point
+# of the setting, and the failure is invisible: the box simply stops coming back one day.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -91,8 +98,6 @@ Environment=PYTHONUNBUFFERED=1
 ExecStart=/usr/bin/python3 -m tub3.app --fullscreen --headless
 Restart=always
 RestartSec=3
-# A television comes back on its own. Never give up restarting it.
-StartLimitIntervalSec=0
 
 [Install]
 WantedBy=multi-user.target
