@@ -77,8 +77,54 @@ def settings() -> dict:
     return load_settings()
 
 
+def expected() -> dict[str, int]:
+    """network_name -> channel, for every station that has a config.
+
+    `horizons` reads the schedule, so a station with no blocks at all does not appear in it —
+    `GROUP BY station` cannot return a row for a station that has none. Taking `min()` over
+    what it returns therefore reports a healthy dial whenever the *only* station with a
+    schedule is comfortably ahead, which is exactly the state a fresh lineup leaves behind:
+    one channel built, nine configs with nothing behind them, and a supervisor announcing
+    that all is well.
+
+    So the set of stations that ought to exist has to come from the configs, and the schedule
+    is checked against it rather than the other way round.
+    """
+    from .schedules import station_confs
+    return {conf["network_name"]: conf["channel_number"] for conf in station_confs()}
+
+
+def _build_python() -> Path:
+    python = REPO / ".venv-build" / "bin" / "python"
+    return python if python.exists() else Path(sys.executable)
+
+
+def top_up(channels: set[int] | None = None) -> tuple[bool, str]:
+    """Schedule the given stations (all of them by default) in one build process.
+
+    Separate from `rebuild` because they answer different questions. `rebuild` builds a
+    channel from a folder of media — the fresh-box path, before a lineup exists. This one
+    schedules stations whose configs and pools are already on disk, which is every case after
+    that, and it must stay a single process: upstream caches its directory walk per
+    `content_dir`, and all these stations share one.
+    """
+    args = [str(_build_python()), "-m", "tub3.schedules",
+            "--days", str(BUILD_DAYS),
+            "--cooldown", str(settings().get("cooldown_minutes", 45))]
+    for channel in sorted(channels or []):
+        args += ["--channel", str(channel)]
+
+    proc = subprocess.run(args, cwd=REPO, capture_output=True, text=True, timeout=7200)
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-3:]
+        return False, "build failed: " + " / ".join(tail)
+    summary = [line.strip() for line in (proc.stdout or "").splitlines()
+               if "station(s) scheduled" in line]
+    return True, summary[-1] if summary else "rebuilt"
+
+
 def rebuild(station_channel: int = 3) -> tuple[bool, str]:
-    """Run bootstrap in its own process, with the build interpreter."""
+    """Build one channel from a folder of media. The fresh-box path, before any lineup."""
     conf = settings()
     programs, ads = conf.get("programs_dir"), conf.get("commercials_dir")
     if not programs or not ads:
@@ -88,10 +134,7 @@ def rebuild(station_channel: int = 3) -> tuple[bool, str]:
     if not Path(ads).exists():
         return False, f"commercials folder is unreachable: {ads}"
 
-    python = REPO / ".venv-build" / "bin" / "python"
-    if not python.exists():
-        python = Path(sys.executable)
-
+    python = _build_python()
     name = _station_name(station_channel)
     args = [
         str(python), "-m", "tub3.bootstrap",
@@ -123,29 +166,41 @@ def _station_name(channel: int) -> str | None:
 
 
 def check_and_top_up(*, force: bool = False, quiet: bool = False) -> int:
+    stations = expected()
     left = horizons()
-    if not left:
+
+    if not stations:
+        # No configs at all: nothing has ever been built here, so there is no lineup to
+        # schedule against and the single-channel path is the only one available.
         if not quiet:
-            print("  no schedule at all — building")
+            print("  no station configs — building the first channel")
         ok, message = rebuild()
         print(f"  {message}")
         return 0 if ok else 1
 
-    lowest = min(left.values())
-    if not quiet:
-        for station, hours in sorted(left.items()):
-            mark = "LOW" if hours < LOW_WATER_HOURS else "ok "
-            print(f"  [{mark}] {station:<22} {hours:>6.1f}h left")
+    # A configured station missing from the schedule has zero hours, not no opinion.
+    hours = {name: left.get(name, 0.0) for name in stations}
 
-    if lowest >= LOW_WATER_HOURS and not force:
+    if not quiet:
+        for name, remaining in sorted(hours.items(), key=lambda kv: stations[kv[0]]):
+            mark = "LOW" if remaining < LOW_WATER_HOURS else "ok "
+            note = "  (no schedule)" if name not in left else ""
+            print(f"  [{mark}] {stations[name]:>3}  {name:<22} {remaining:>6.1f}h left{note}")
+
+    stale = {stations[name] for name, remaining in hours.items()
+             if remaining < LOW_WATER_HOURS}
+    if not stale and not force:
         if not quiet:
-            print(f"\n  {lowest:.1f}h remaining, above the {LOW_WATER_HOURS:.0f}h mark — "
-                  f"nothing to do\n")
+            print(f"\n  every channel above the {LOW_WATER_HOURS:.0f}h mark — nothing to do\n")
         return 0
 
+    # A forced run does the whole dial; otherwise only the channels that need it, so a
+    # station with hours left is not regenerated out from under whoever is watching it.
+    target = None if force else stale
     if not quiet:
-        print(f"\n  {lowest:.1f}h left — topping up {BUILD_DAYS} day(s)\n")
-    ok, message = rebuild()
+        which = "every channel" if target is None else f"{len(target)} channel(s)"
+        print(f"\n  topping up {which}, {BUILD_DAYS} day(s)\n")
+    ok, message = top_up(target)
     print(f"  {message}\n")
     return 0 if ok else 1
 
@@ -158,14 +213,24 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     if args.status:
+        stations = expected()
         left = horizons()
-        if not left:
+        if not stations and not left:
             print("\n  No schedule exists yet.\n")
             return 1
         print()
-        for station, hours in sorted(left.items()):
+        for name, channel in sorted(stations.items(), key=lambda kv: kv[1]):
+            hours = left.get(name)
+            if hours is None:
+                print(f"  {channel:>3}  {name:<22}      —  no schedule")
+                continue
             until = datetime.fromtimestamp(time.time() + hours * 3600)
-            print(f"  {station:<22} {hours:>6.1f}h  (until {until:%a %H:%M})")
+            print(f"  {channel:>3}  {name:<22} {hours:>6.1f}h  (until {until:%a %H:%M})")
+        # A station with blocks but no config is a leftover from a previous lineup; it will
+        # never be topped up again and the tuner will show it until its schedule runs out.
+        for name, hours in sorted(left.items()):
+            if name not in stations:
+                print(f"    -  {name:<22} {hours:>6.1f}h  (orphaned — no config)")
         print()
         return 0
 
