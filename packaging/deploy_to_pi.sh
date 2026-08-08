@@ -50,7 +50,14 @@ fi
 
 say "Sending source"
 # --exclude before the path, BSD tar and GNU tar both honour it there.
-tar --exclude='./vendor' --exclude='./.venv' --exclude='./.venv-build' \
+#
+# --no-xattrs and COPYFILE_DISABLE both matter, and for different reasons. macOS bsdtar
+# writes Apple extended attributes as headers GNU tar does not recognise, which produces a
+# warning per file at the far end; COPYFILE_DISABLE stops it emitting ._ AppleDouble
+# companions. Neither breaks the transfer, but a screenful of warnings on every deploy
+# trains you to ignore output that might one day say something worth reading.
+COPYFILE_DISABLE=1 tar --no-xattrs \
+    --exclude='./vendor' --exclude='./.venv' --exclude='./.venv-build' \
     --exclude='./__pycache__' --exclude='*.pyc' --exclude='./runtime' \
     -cf - . | ssh "$HOST" "mkdir -p ~/$DEST && tar -xf - -C ~/$DEST"
 
