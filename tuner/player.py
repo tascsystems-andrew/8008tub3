@@ -72,6 +72,7 @@ class MpvPlayer:
     def __init__(
         self,
         *,
+        drm_mode: str | None = None,
         socket_path: str | None = None,
         video_output: str | None = None,
         fullscreen: bool = True,
@@ -82,6 +83,7 @@ class MpvPlayer:
             tempfile.gettempdir(), f"tub3-mpv-{os.getpid()}.sock"
         )
         self.video_output = video_output
+        self.drm_mode = drm_mode
         self.fullscreen = fullscreen
         self.extra_args = extra_args or []
         # macOS attributes a window's dock icon to the bundle containing the running
@@ -121,14 +123,19 @@ class MpvPlayer:
             # television anyway.
             "--osc=no",
             "--no-input-default-bindings",
-            # Frame pacing, not throughput. A 23.976 fps film on a 30 Hz output cannot divide
-            # evenly, so with mpv's default `video-sync=audio` some frames are held for one
-            # refresh and some for two. Nothing drops, no cache starves, the CPU sits idle —
-            # and it still looks choppy, which is why this reads as a buffering problem and
-            # is not one. `display-resample` retimes playback to the display's actual clock
-            # and resamples audio to match, which is the difference between a judder every
-            # few frames and an inaudible pitch change.
-            "--video-sync=display-resample",
+            # `video-sync` is left at mpv's default of `audio`, and that is a decision.
+            #
+            # `display-resample` looks like the right answer to judder and was measurably
+            # much worse here: it renders one output frame per *display refresh* rather than
+            # per source frame, so a 4K file being shown at 1080p pays for a 3840x2160 ->
+            # 1920x1080 scale sixty times a second instead of twenty-four. Measured on the
+            # box: the filter chain kept perfect pace at 23.976 fps while the video output
+            # managed 18.6 — decode idle, presentation drowning. Raising the refresh rate to
+            # fix cadence therefore made it dramatically worse, because it doubled the work.
+            #
+            # The cadence problem it was meant to solve is better fixed by the display mode,
+            # which costs nothing per frame: at 59.94 Hz, 29.97 fps content lands on exactly
+            # two refreshes and 23.976 on the standard 3:2 film pattern.
             "--cache=yes",
             # Sized for a bad minute on the NAS, not a good one. Measured while Plex was
             # running intro detection over the same share: 3.5 MB/s, against the 5-7 MB/s a
@@ -143,6 +150,20 @@ class MpvPlayer:
             "--demuxer-readahead-secs=60",
             f"--input-ipc-server={self.socket_path}",
         ]
+
+        # Which display mode to drive, when rendering straight to KMS.
+        #
+        # mpv picks its own mode through its DRM context, from whatever the connector calls
+        # preferred — here 3840x2160@30. `video=` on the kernel command line does not change
+        # that; it sets the console framebuffer, which is why setting it looked like it should
+        # work, reached the kernel intact, and changed nothing on screen.
+        #
+        # The mode matters more than the resolution. 30 Hz divides into neither 23.976 nor
+        # 29.97, so every film and every television episode is shown with some frames held
+        # for one refresh and some for two. Nothing drops and nothing starves; it simply
+        # judders, which is why it reads as a decode or buffering fault and is neither.
+        if self.drm_mode:
+            args.append(f"--drm-mode={self.drm_mode}")
 
         # A television does not change size when the programme does. mpv resizes its window
         # to each new file by default, so a 640x480 commercial inside a 720p show makes the
@@ -372,6 +393,8 @@ class MpvPlayer:
 
         # playback-restart fires when frames actually start presenting.
         started = self._wait_for_event("playback-restart", timeout)
+        if started:
+            self._pace_to_source()
         latency_ms = (time.perf_counter() - start) * 1000.0
         if not started:
             return TuneResult(False, latency_ms, "no playback-restart event")
@@ -488,6 +511,36 @@ class MpvPlayer:
     # enormous on a retina panel, unreadable on a CRT. Declaring the space explicitly makes
     # mpv scale it to fit, so the menu occupies the same fraction of the screen everywhere.
     OVERLAY_RES = (1920, 1080)
+
+    # Above this width, retiming to the display costs more than it buys.
+    RESAMPLE_MAX_WIDTH = 2048
+
+    def _pace_to_source(self) -> None:
+        """Pick a frame-pacing strategy for the file that just started.
+
+        This library has three frame rates — 23.976 film, 25.0 PAL, 29.97 NTSC — and a fixed
+        refresh divides evenly into at most one of them. At 59.94, NTSC lands on exactly two
+        refreshes; film gets the familiar 3:2 pattern; and PAL gets 2.398, which is the worst
+        of the three and is most of the British children's programming on this dial.
+
+        `display-resample` fixes that by retiming playback to the display's own clock instead
+        of the audio clock, and resampling audio to match. Measured here on 1080p: a full
+        59.96 fps presented, zero drops.
+
+        It is not free, and the cost scales with picture size, because it renders once per
+        *refresh* rather than once per source frame. On a 4K file that means a
+        3840x2160 -> 1920x1080 scale sixty times a second, and the same measurement collapses
+        to 18.6 fps presented — visibly worse than the judder it was meant to cure. Hence the
+        width test rather than a global setting: almost the whole library is at or below
+        1080p and gets the smooth path; the handful of 4K films keep the cheap one.
+        """
+        width = self.get_property("width")
+        try:
+            wide = int(width) > self.RESAMPLE_MAX_WIDTH
+        except (TypeError, ValueError):
+            wide = False          # unknown: assume it is fine, and prefer smooth
+        self._command(["set_property", "video-sync",
+                       "audio" if wide else "display-resample"], wait=False)
 
     def show_overlay(self, ass_text: str, overlay_id: int = 1) -> None:
         if not self.alive:
