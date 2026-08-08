@@ -70,6 +70,31 @@ class Tub3Catalog(ShowCatalog):
 
     # ---------- the one override ----------
 
+    def make_reel_block(self, when, bumpers=True, *args, **kwargs):
+        """Break pods without a station ident wrapped round them.
+
+        Upstream puts a bumper on each end of every break. Over a day that is 320 airings of
+        the same four generated cards — the channel announcing itself every eight minutes to
+        someone who has not moved. Real stations did ident around breaks, but they had
+        hundreds of them and did not use the same four on a loop.
+
+        The channel identification belongs on the *change*, which is where the tuner already
+        puts it: `BugState` shows channel, name and what is on for four seconds after a tune,
+        fades on its own, and comes back on a BACK press. That is the moment someone actually
+        wants to know what they are watching.
+
+        `bumpers=False` is upstream's own parameter — `make_reel_block` skips both `find_bump`
+        calls and returns `ReelBlock(None, reels, None)`. No fork, and no risk of the empty
+        `bump_dir` trap, because the bump content still exists and is still catalogued.
+
+        Left on for commercial-free channels: with no advertising to fill a break, upstream
+        fills it from the bump pool instead, so switching bumpers off there would leave it
+        with nothing to schedule at all.
+        """
+        if self.config.get("commercial_free"):
+            return super().make_reel_block(when, bumpers, *args, **kwargs)
+        return super().make_reel_block(when, False, *args, **kwargs)
+
     def find_commercial(self, seconds, when, commercial_dir):
         tag = commercial_dir if commercial_dir else self.config.get("commercial_dir")
         if not tag or not self.clip_index.get(tag):

@@ -134,6 +134,7 @@ def physical_address() -> str:
 
 def power_status(timeout: float = 6.0) -> tuple[str | None, str]:
     """Ask the TV whether it is on. Ground truth, and the whole basis of the probe."""
+    ensure_configured()
     code, out = _run(["cec-ctl", "-d", CEC_DEVICE, "--to", "0",
                       "--give-device-power-status"], timeout=timeout)
     match = re.search(r"pwr-state:\s*(\w[\w\- ]*)", out)
@@ -229,6 +230,11 @@ def send(name: str, *, gap: float = 0.0) -> Result:
     ok, why = available()
     if not ok:
         return Result(False, why)
+    # Claim a logical address first. It does not survive a reboot, and without it the
+    # adapter is a wire rather than a participant: commands transmit, nothing ever replies.
+    # Doing it here rather than at startup means it is impossible to forget, and it costs
+    # one subprocess on the first CEC use per boot.
+    ensure_configured()
     spec = COMMANDS.get(name)
     if spec is None:
         return Result(False, f"unknown command {name!r}")

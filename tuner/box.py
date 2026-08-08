@@ -9,6 +9,10 @@ Two modes, because four buttons is the whole vocabulary:
     WATCH   UP/DOWN change channel   SELECT opens the menu   BACK shows the bug
     MENU    UP/DOWN move the cursor  SELECT activates        BACK goes up a level
 
+BACK is a shortcut everywhere it appears, never a requirement. No clicker has a button
+labelled anything like it — on the Elan it is the long-press of the down arrow — so every
+menu screen carries its own `Back` item and the whole tree is navigable with three verbs.
+
 There is no spinner and no "loading" state anywhere. Measured channel change is ~17ms median
 and 50ms worst through real mpv, so there is nothing to hide — the correct design is to show
 nothing at all rather than a progress indicator that flashes for one frame.
@@ -47,14 +51,24 @@ class BugState:
 
 
 def render_bug(airing: Airing) -> str:
-    """ASS markup for the corner bug — channel, name, what's on, how long is left."""
-    minutes_left = int(airing.remaining // 60)
+    """ASS markup for the corner bug — channel, name, what's on, how long is left.
+
+    The programme line comes from `tuner.titles`, which resolves the file against the
+    Plex library at build time. A filename is not a title, and a television showing
+    `Bill.Nye.-..The.Science.Guy.S04E12.SDTV.Ocean.Life` undoes a lot of other work.
+    """
+    from .titles import describe
+
+    minutes_left = int(airing.programme_remaining // 60)
     remaining = f"{minutes_left} min left" if minutes_left else "ending"
+    show, detail = describe(airing.program.path)
     lines = [
         f"{{\\b1}}{airing.channel}  {airing.channel_name}{{\\b0}}",
-        airing.program.name[:40],
-        remaining,
+        show,
     ]
+    if detail:
+        lines.append(f"{{\\fs24\\1c&HAAAAAA&}}{detail}{{\\fs30\\1c&H55FF33&}}")
+    lines.append(remaining)
     header = (
         r"{\an1\pos(70,1010)\fnmonospace\fs30\bord0\shad3"
         r"\1c&H55FF33&\4c&H000000&}"
@@ -85,7 +99,15 @@ class Box:
 
     # ---------- tuning ----------
 
-    def tune(self, channel: int) -> None:
+    def tune(self, channel: int, *, announce: bool = True) -> None:
+        """Put a channel on screen.
+
+        `announce` is what separates the two reasons this gets called. A viewer pressing
+        up/down wants to be told where they landed; the box stepping to the next programme
+        on the channel they are already watching does not — that is the same channel it was
+        a moment ago, and saying so every time a programme starts is the box talking to
+        itself. Nothing in the schedule is a channel change.
+        """
         airing = self.lineup.now(channel, time.time())
         if airing is None or airing.off_air:
             # Dead air. A real station showed a sign-off card rather than a black screen.
@@ -101,10 +123,15 @@ class Box:
         # `seek`, never `offset`. A programme interrupted by a mid-roll appears twice in the
         # plan and its second half carries a non-zero `skip` — punching in at `offset` alone
         # would restart it from the top of the file.
-        result = self.player.tune(airing.program.path, airing.seek)
+        result = self.player.tune(airing.program.path, airing.seek,
+                                  duration=airing.program.duration)
         self.last_latency_ms = result.latency_ms
         self.channel = channel
-        self.bug = BugState(airing=airing, shown_at=time.monotonic())
+        # Not announcing: keep the old timestamp so the bug stays however faded it already
+        # was, rather than resetting its clock. Carrying the *airing* forward still matters,
+        # because a BACK press must describe what is on now, not what was on before.
+        shown_at = time.monotonic() if announce else self.bug.shown_at
+        self.bug = BugState(airing=airing, shown_at=shown_at)
         self._redraw()
 
     def surf(self, delta: int) -> None:
@@ -226,7 +253,8 @@ class Box:
         current = self.bug.airing
         following = current.next_entry if current else None
         if following is not None:
-            result = self.player.tune(following.path, following.skip)
+            result = self.player.tune(following.path, following.skip,
+                                      duration=following.duration)
             self.last_latency_ms = result.latency_ms
             if result.ok:
                 # Re-read the clock for display rather than synthesising an Airing, so the
@@ -236,7 +264,8 @@ class Box:
                     self.bug = BugState(airing=refreshed, shown_at=self.bug.shown_at)
                 return
 
-        self.tune(self.channel)
+        # Same channel, next programme — not a channel change, so it does not announce.
+        self.tune(self.channel, announce=False)
 
     def _pump(self, driver: Driver) -> None:
         try:

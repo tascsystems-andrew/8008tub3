@@ -11,6 +11,10 @@ So the entire on-device vocabulary is:
     SELECT  open the menu / activate the highlighted item
     BACK    dismiss / go up one level
 
+BACK is the weakest of the four and nothing may depend on it alone. No clicker has a button
+for it — see the Elan mapping below, where it arrives only as a long-press — so the menu
+gives every screen a `Back` item and treats the verb as a shortcut (`tuner/menu.py`).
+
 CEC remotes and keyboards offer more than four keys, and where they do we accept the extras
 (digits for direct channel entry, a dedicated power key). Nothing depends on them.
 
