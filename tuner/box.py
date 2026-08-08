@@ -51,29 +51,41 @@ class BugState:
 
 
 def render_bug(airing: Airing) -> str:
-    """ASS markup for the corner bug — channel, name, what's on, how long is left.
+    """The channel identifier, the way a CRT drew it.
 
-    The programme line comes from `tuner.titles`, which resolves the file against the
-    Plex library at build time. A filename is not a title, and a television showing
+    Two blocks, deliberately far apart. The channel number goes top right and is enormous —
+    that is what a television actually did, and it is the one thing readable from across a
+    room while you are still pressing the button. Everything else goes bottom right at a
+    normal size, because it is for someone who has already stopped and is now curious.
+
+    The programme name comes from `tuner.titles`, which resolves the file against the Plex
+    library at build time. A filename is not a title, and a television showing
     `Bill.Nye.-..The.Science.Guy.S04E12.SDTV.Ocean.Life` undoes a lot of other work.
     """
     from .titles import describe
 
+    # Zero-padded, like every set-top box and every CRT tuner: CH 03, not CH 3.
+    channel = (
+        r"{\an9\pos(1840,54)\fnmonospace\fs150\b1\bord0\shad6"
+        r"\1c&H55FF33&\4c&H000000&}"
+        f"CH {airing.channel:02d}"
+    )
+
     minutes_left = int(airing.programme_remaining // 60)
     remaining = f"{minutes_left} min left" if minutes_left else "ending"
     show, detail = describe(airing.program.path)
-    lines = [
-        f"{{\\b1}}{airing.channel}  {airing.channel_name}{{\\b0}}",
-        show,
-    ]
+
+    lines = [f"{{\\b1}}{airing.channel_name}{{\\b0}}", show]
     if detail:
-        lines.append(f"{{\\fs24\\1c&HAAAAAA&}}{detail}{{\\fs30\\1c&H55FF33&}}")
+        lines.append(f"{{\\fs26\\1c&HAAAAAA&}}{detail}{{\\fs34\\1c&H55FF33&}}")
     lines.append(remaining)
-    header = (
-        r"{\an1\pos(70,1010)\fnmonospace\fs30\bord0\shad3"
+
+    info = (
+        r"{\an3\pos(1840,1020)\fnmonospace\fs34\bord0\shad3"
         r"\1c&H55FF33&\4c&H000000&}"
-    )
-    return header + r"\N".join(lines)
+    ) + r"\N".join(lines)
+
+    return channel + "\n" + info
 
 
 class Box:
