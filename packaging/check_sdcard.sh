@@ -118,6 +118,17 @@ fi
 # human and fails at the one moment it matters — over a network that needs that key.
 if grep -q "ssh-ed25519[[:space:]]\+$WANT_KEY_BODY" <<<"$SETTINGS"; then
     pass "SSH authorised key is the BoobTube key, correctly formed"
+    # Imager's key box accumulates entries across sessions, so an earlier bad paste can
+    # still be sitting above a later good one. Both get installed. The malformed line is
+    # inert — sshd skips it and it grants nothing — but it is exactly the artefact that
+    # wastes twenty minutes when you are debugging something else months later.
+    STRAY="$(grep -cE "(^|['\"[:space:]])$WANT_KEY_BODY" <<<"$SETTINGS")"
+    GOOD="$(grep -cE "ssh-ed25519[[:space:]]+$WANT_KEY_BODY" <<<"$SETTINGS")"
+    if [[ "$STRAY" -gt "$GOOD" ]]; then
+        warn "There is also a bare copy of the key with no 'ssh-ed25519 ' prefix"
+        note "Harmless — sshd skips it — but worth removing. Clear the old entry from"
+        note "Imager's key box next time; it keeps what you pasted before."
+    fi
 elif grep -q "$WANT_KEY_BODY" <<<"$SETTINGS"; then
     fail "The BoobTube key is on the card WITHOUT its 'ssh-ed25519 ' prefix"
     note "sshd would skip the line, so this card boots and refuses your key."
@@ -155,9 +166,15 @@ grep -q "$WANT_HOST" <<<"$SETTINGS" \
     || { fail "Hostname is not '$WANT_HOST'"
          note "~/.ssh/config points 'boobtube' at boobtube.local."; }
 
-grep -qE "name:[[:space:]]*$WANT_USER|name[[:space:]]*=[[:space:]]*\"?$WANT_USER" <<<"$SETTINGS" \
-    && pass "User is $WANT_USER" \
-    || fail "User is not '$WANT_USER' — the ssh config entry assumes it"
+# Three spellings across the three formats: cloud-init `name: andrew`, custom.toml
+# `name = "andrew"`, and firstrun.sh `usermod -l "andrew"` / `userconf 'andrew'`. Missing
+# the third made a correct card report a wrong username.
+if grep -qE "name:[[:space:]]*$WANT_USER|name[[:space:]]*=[[:space:]]*\"?$WANT_USER|usermod -l \"$WANT_USER\"|userconf '$WANT_USER'" \
+     <<<"$SETTINGS"; then
+    pass "User is $WANT_USER"
+else
+    fail "User is not '$WANT_USER' — the ssh config entry assumes it"
+fi
 
 if grep -q "$WANT_TZ" <<<"$SETTINGS"; then
     pass "Timezone is $WANT_TZ"
