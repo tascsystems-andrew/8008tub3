@@ -62,11 +62,28 @@ def all_event_nodes() -> list[str]:
                   key=lambda p: int(p.rsplit("event", 1)[1]))
 
 
-def watch(devices: list[str], seconds: float | None = None) -> int:
+EV_TYPES = {0x00: "SYN", 0x01: "KEY", 0x02: "REL", 0x03: "ABS", 0x04: "MSC", 0x11: "LED",
+            0x14: "REP"}
+
+# Modifiers arrive alongside the key they modify — a clicker's long-press is often
+# Shift+F5 or Alt+Tab. They are correctly ignored by the tuner, but reporting them as
+# "UNMAPPED" in a diagnostic invites someone to go and map them, which would fire a
+# spurious verb on every long-press. Name them instead.
+MODIFIERS = {42: "LEFTSHIFT", 54: "RIGHTSHIFT", 29: "LEFTCTRL", 97: "RIGHTCTRL",
+             56: "LEFTALT", 100: "RIGHTALT", 125: "LEFTMETA", 126: "RIGHTMETA"}
+
+
+def watch(devices: list[str], seconds: float | None = None, raw: bool = False) -> int:
     """Print every key press across every device, and whether the box would understand it.
 
     Watches all of them at once. `seconds` bounds the run so this can be driven from a
     remote shell, where there is nobody at the keyboard to press Ctrl+C.
+
+    `raw` drops the EV_KEY/key-down filter and prints every event of every type. Silence in
+    the filtered view is ambiguous — a button that sends only a scancode (EV_MSC), or that
+    drives a laser diode in hardware and sends nothing at all, look identical to a button
+    that is not being pressed. Raw distinguishes them, which turns "maybe it's broken" into
+    a fact.
     """
     import select
     import time
@@ -112,6 +129,29 @@ def watch(devices: list[str], seconds: float | None = None) -> int:
                 if not data or len(data) < EVENT_SIZE:
                     continue
                 _, _, etype, code, value = struct.unpack(EVENT_FORMAT, data)
+
+                if raw:
+                    if etype == 0x00:                  # SYN, one after every event group
+                        continue
+                    short = path.replace("/dev/input/", "")
+                    kind = EV_TYPES.get(etype, f"0x{etype:02x}")
+                    edge = {0: "up", 1: "down", 2: "repeat"}.get(value, str(value)) \
+                        if etype == EV_KEY else str(value)
+                    known = ""
+                    if etype == EV_KEY and value == 1:
+                        seen.add(code)
+                        if code in EVDEV_MAP:
+                            known = f"  -> {EVDEV_MAP[code].value}"
+                        elif code in EVDEV_DIGITS:
+                            known = f"  -> digit {EVDEV_DIGITS[code]}"
+                        elif code in MODIFIERS:
+                            known = f"  ({MODIFIERS[code]}, modifier — ignored, correctly)"
+                        else:
+                            known = "  -> UNMAPPED"
+                    print(f"    {short:<16} {kind:<5} code={code:<6} {edge}{known}",
+                          flush=True)
+                    continue
+
                 if etype != EV_KEY or value != 1:      # key-down only
                     continue
 
@@ -152,6 +192,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--device", help="/dev/input/eventN (default: watch all of them)")
     ap.add_argument("--seconds", type=float,
                     help="stop after N seconds, for driving this from a remote shell")
+    ap.add_argument("--raw", action="store_true",
+                    help="print every event of every type, not just mapped key presses")
     args = ap.parse_args(argv)
 
     if args.action == "list":
@@ -160,7 +202,7 @@ def main(argv: list[str] | None = None) -> int:
     devices = [args.device] if args.device else all_event_nodes()
     if not devices:
         return list_devices()
-    return watch(devices, seconds=args.seconds)
+    return watch(devices, seconds=args.seconds, raw=args.raw)
 
 
 if __name__ == "__main__":
