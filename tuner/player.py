@@ -130,10 +130,17 @@ class MpvPlayer:
             # few frames and an inaudible pitch change.
             "--video-sync=display-resample",
             "--cache=yes",
-            "--demuxer-max-bytes=64MiB",
-            # Seconds, not bytes. 64 MiB is a couple of minutes of a DVD rip and eight
-            # seconds of a 4K remux, so a byte cap alone buffers the files that need it least.
-            "--demuxer-readahead-secs=20",
+            # Sized for a bad minute on the NAS, not a good one. Measured while Plex was
+            # running intro detection over the same share: 3.5 MB/s, against the 5-7 MB/s a
+            # 4K HEVC film wants. The old 64 MiB was about ten seconds of one of those, so
+            # any sustained dip emptied it and the picture stuttered — which reads as a
+            # decode problem and is a supply problem. 512 MiB is a couple of minutes of
+            # headroom and a fraction of this box's memory.
+            "--demuxer-max-bytes=512MiB",
+            "--demuxer-max-back-bytes=64MiB",
+            # Seconds, not bytes. A byte cap alone buffers least where it is needed most: the
+            # same 64 MiB is minutes of a DVD rip and seconds of a remux.
+            "--demuxer-readahead-secs=60",
             f"--input-ipc-server={self.socket_path}",
         ]
 
