@@ -67,6 +67,45 @@ def save_settings(data: dict) -> dict:
     return current
 
 
+NAS_HELPER = "/usr/local/sbin/tub3-nas"
+
+
+def nas(request: dict, timeout: float = 60.0) -> dict:
+    """Ask the root helper to do one storage thing.
+
+    The settings server does not run as root and should not: it is an unauthenticated HTTP
+    listener. Mounting is root's job, so it lives behind `sudo` on exactly one program with
+    exactly four verbs.
+
+    The request goes over **stdin**, never argv, because one of its fields is a password and
+    argv is readable by every user on the box through `ps`.
+    """
+    import subprocess
+
+    if not Path(NAS_HELPER).exists():
+        return {"ok": False,
+                "error": "The storage helper is not installed — re-run pi_setup.sh."}
+    try:
+        result = subprocess.run(
+            ["sudo", "-n", NAS_HELPER],
+            input=json.dumps(request), capture_output=True, text=True, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "The server took too long to answer."}
+    if result.returncode != 0 and not result.stdout.strip():
+        detail = (result.stderr or "").strip().splitlines()[-1:] or ["no detail"]
+        return {"ok": False, "error": f"Could not run the storage helper: {detail[0]}"}
+    try:
+        return json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return {"ok": False, "error": "The storage helper returned something unreadable."}
+
+
+def _scrub(payload: dict) -> dict:
+    """Never let a secret back out over HTTP, even by accident."""
+    return {k: v for k, v in payload.items() if k not in ("password", "username")}
+
+
 def _epoch(text: str) -> float:
     return datetime.strptime(str(text).replace("T", " "), "%Y-%m-%d %H:%M:%S").timestamp()
 
@@ -136,12 +175,20 @@ PAGE = """<!doctype html>
 <meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
 <title>BoobTube</title>
 <style>
- :root{--bg:#111;--card:#1a1a1a;--line:#2c2c2c;--ink:#e8e8e8;--dim:#8a8a8a;--amber:#33ff55}
+ /* The house colours, from brand.py. The on-screen menu is phosphor green because it is
+    pretending to be a CRT from three metres away; this page is a settings surface on a
+    desk, so it wears the mark's own purple and gold instead. Same family, different room.
+    --amber is kept as the accent variable name so every existing rule still applies. */
+ :root{--bg:#0e0c14;--card:#17141f;--line:#2a2436;--ink:#e8e8ea;--dim:#8b859b;
+       --amber:#a85cf6;--gold:#ffc83c}
  *{box-sizing:border-box}
  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,system-ui,sans-serif}
  .wrap{max-width:760px;margin:0 auto;padding:32px 20px 64px}
- h1{font:700 22px/1 ui-monospace,monospace;letter-spacing:.10em;color:var(--amber);margin:0 0 4px}
- .sub{color:var(--dim);margin:0 0 28px;font-size:13px}
+ h1{font:700 22px/1 ui-monospace,monospace;letter-spacing:.10em;color:var(--gold);margin:0 0 4px}
+ .sub{color:var(--dim);margin:0;font-size:13px}
+ .brand{display:flex;align-items:center;gap:13px;margin:0 0 28px}
+ .val{color:var(--gold)}
+ button{box-shadow:0 1px 0 rgba(0,0,0,.4)}
  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:20px;margin-bottom:18px}
  h2{font-size:12px;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);margin:0 0 14px;font-weight:600}
  label{display:block;font-size:13px;color:var(--dim);margin:14px 0 5px}
@@ -151,7 +198,8 @@ PAGE = """<!doctype html>
  .row{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
  .val{color:var(--amber);font-weight:600}
  .hint{font-size:12.5px;color:var(--dim);margin-top:6px}
- button{background:var(--amber);color:#06210f;border:0;border-radius:6px;padding:10px 16px;
+ /* Was near-black, which read fine on the old green accent and is unreadable on purple. */
+ button{background:var(--amber);color:#fff;border:0;border-radius:6px;padding:10px 16px;
    font-weight:650;font-size:13.5px;cursor:pointer}
  button.ghost{background:transparent;color:var(--amber);border:1px solid var(--line)}
  .ch{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--line);font-size:14px}
@@ -159,10 +207,40 @@ PAGE = """<!doctype html>
  .tag{font:11px ui-monospace,monospace;color:var(--dim)}
  .warn{color:#ffb454}
  .ok{color:var(--amber)}
+ .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+ @media(max-width:520px){.grid2{grid-template-columns:1fr}}
+ select{width:100%;padding:9px 11px;background:#0d0d0d;border:1px solid var(--line);
+   border-radius:6px;color:var(--ink);font:13px ui-monospace,monospace}
+ input[type=password]{width:100%;padding:9px 11px;background:#0d0d0d;
+   border:1px solid var(--line);border-radius:6px;color:var(--ink);
+   font:13px ui-monospace,monospace}
+ .pick{display:inline-block;margin:3px 5px 0 0;padding:3px 9px;border:1px solid var(--line);
+   border-radius:5px;cursor:pointer;font:12px ui-monospace,monospace;color:var(--amber)}
+ .pick:hover{border-color:var(--amber)}
 </style>
 <div class=wrap>
- <h1>BoobTube</h1>
- <p class=sub id=sub>&nbsp;</p>
+ <div class=brand>
+  <!-- The mark, same geometry as draw_icon: a coaxial connector's shell, mouth at twelve
+       o'clock, with the centre conductor in gold.
+
+       Drawn with stroke-dasharray rather than arc paths. An SVG elliptical arc picks one
+       of four possible curves from two flags, and getting them wrong silently yields a
+       different arc rather than an error — which is exactly what happened first time.
+       A dashed circle has no such ambiguity: circumference is 2*pi*32 = 201.06, so a
+       280-degree stroke is 156.4 with a 44.7 gap, rotated so the gap lands at the top. -->
+  <svg viewBox="0 0 100 100" width=42 height=42 aria-hidden=true fill=none
+       stroke-width=10.5>
+   <circle cx=50 cy=54.3 r=32 stroke="#622ca2"
+           stroke-dasharray="61.4 139.6" transform="rotate(35 50 54.3)"/>
+   <circle cx=50 cy=50.5 r=32 stroke="#9644ec"
+           stroke-dasharray="156.4 44.7" transform="rotate(-50 50 50.5)"/>
+   <circle cx=50 cy=50.5 r=9.8 fill="#ffc83c" stroke=none/>
+  </svg>
+  <div>
+   <h1>BoobTube</h1>
+   <p class=sub id=sub>&nbsp;</p>
+  </div>
+ </div>
 
  <div class=card>
   <h2>On now</h2>
@@ -178,11 +256,39 @@ PAGE = """<!doctype html>
  </div>
 
  <div class=card>
+  <h2>Your network drive</h2>
+  <div id=mounted></div>
+  <div class=grid2>
+   <div><label>Server</label><input type=text id=nasserver placeholder="10.0.1.12"></div>
+   <div><label>Share</label>
+    <select id=nasshare><option value="">— connect to see shares —</option></select></div>
+  </div>
+  <div class=grid2>
+   <div><label>Username</label><input type=text id=nasuser autocomplete=username></div>
+   <div><label>Password</label>
+    <input type=password id=naspass autocomplete=current-password></div>
+  </div>
+  <div class=hint>Stored on this box only, readable by root alone, and never sent back to
+   this page. Mounted read-only — nothing here can change or delete anything on your NAS.</div>
+  <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap">
+   <button class=ghost id=naslist>Find shares</button>
+   <button id=nasmount>Connect</button>
+  </div>
+  <div class=hint id=nasmsg></div>
+ </div>
+
+ <div class=card>
   <h2>Where your stuff is</h2>
-  <label>Shows</label><input type=text id=programs placeholder="/path/to/shows">
-  <label>Commercials</label><input type=text id=commercials placeholder="/path/to/Commercials">
+  <label>Shows</label><input type=text id=programs placeholder="/mnt/tub3/Media/TV">
+  <div class=hint id=browse_programs></div>
+  <label>Commercials</label><input type=text id=commercials placeholder="/mnt/tub3/Media/Commercials">
+  <div class=hint id=browse_commercials></div>
   <div class=hint>The commercials folder holds Kids / Family / Late / Unsorted. Anything in
    Unsorted is treated as Late, so it can never reach a kids channel.</div>
+  <label style="display:flex;align-items:center;gap:9px;margin-top:16px">
+   <input type=checkbox id=fullscreen style="width:auto;accent-color:var(--amber)">
+   Fill the screen
+  </label>
   <div style="margin-top:18px;display:flex;gap:10px">
    <button id=save>Save</button>
    <button class=ghost id=rebuild>Rebuild schedule</button>
@@ -209,6 +315,7 @@ async function refresh(){
   $('#fullscreen').checked = !!s.settings.fullscreen;
   $('#programs').value = s.settings.programs_dir||'';
   $('#commercials').value = s.settings.commercials_dir||'';
+  paintStorage(s.storage);
   paintLoad();
   const inv=s.inventory;
   $('#inventory').innerHTML = inv.known && inv.spots
@@ -221,6 +328,59 @@ function paintLoad(){
   const v=$('#adload').value, d=LOADS[v]||{};
   $('#adlabel').textContent=d.name||''; $('#adhint').textContent=d.detail||'';
 }
+
+// --- network drive -------------------------------------------------------------------
+function paintStorage(st){
+  const box=$('#mounted');
+  const live=(st&&st.mounts||[]).filter(m=>m.mounted);
+  if(!live.length){ box.innerHTML='<div class=hint>Nothing connected yet.</div>'; return; }
+  box.innerHTML=live.map(m=>{
+    const top=(m.top_level||[]).map(f=>
+      `<span class=pick data-path="${m.mount_point}/${f}">${f}</span>`).join('');
+    return `<div class=ch><div><b class=ok>${m.mount_point}</b><br>
+      <span class=tag>${m.free_gb} GB free</span></div></div>
+      <div style="margin:8px 0 4px">${top}</div>`;
+  }).join('');
+  // Clicking a folder fills whichever box was focused last — no typing paths by hand.
+  box.querySelectorAll('.pick').forEach(el=>el.onclick=()=>{
+    const target=LASTFIELD||'#programs';
+    $(target).value=el.dataset.path;
+    $('#saved').textContent=`Set ${target==='#programs'?'Shows':'Commercials'} to ${el.dataset.path}. Save to keep it.`;
+  });
+}
+let LASTFIELD='#programs';
+['#programs','#commercials'].forEach(id=>$(id).addEventListener('focus',()=>LASTFIELD=id));
+
+function nasBody(){
+  return {server:$('#nasserver').value.trim(), share:$('#nasshare').value,
+          username:$('#nasuser').value, password:$('#naspass').value};
+}
+async function nasCall(action,extra){
+  const r=await fetch('/api/storage/'+action,{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(Object.assign(nasBody(),extra||{}))});
+  return r.json();
+}
+$('#naslist').onclick=async()=>{
+  $('#nasmsg').textContent='Looking…';
+  const r=await nasCall('list');
+  if(!r.ok){ $('#nasmsg').innerHTML=`<span class=warn>${r.error}</span>`; return; }
+  $('#nasshare').innerHTML=r.shares.map(s=>`<option>${s}</option>`).join('');
+  $('#nasmsg').textContent=`${r.shares.length} share(s). Pick one and Connect.`;
+};
+$('#nasmount').onclick=async()=>{
+  if(!$('#nasshare').value){ $('#nasmsg').innerHTML=
+    '<span class=warn>Pick a share first — Find shares will list them.</span>'; return; }
+  $('#nasmsg').textContent='Connecting…';
+  const r=await nasCall('mount');
+  if(!r.ok){ $('#nasmsg').innerHTML=`<span class=warn>${r.error}</span>`; return; }
+  // The password has done its job. Do not leave it sitting in a form field.
+  $('#naspass').value='';
+  $('#nasmsg').innerHTML=`<span class=ok>Connected at ${r.mount_point}</span>
+    <span class=tag>SMB ${r.version} · ${r.free_gb} GB free</span>
+    — now pick your Shows and Commercials folders below.`;
+  refresh();
+};
 $('#adload').addEventListener('input',paintLoad);
 $('#save').onclick=async()=>{
   await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -269,6 +429,7 @@ class Handler(BaseHTTPRequestHandler):
                 "channels": channel_status(),
                 "settings": settings,
                 "inventory": ad_inventory(settings.get("commercials_dir", "")),
+                "storage": _scrub(nas({"action": "status"}, timeout=10.0)),
                 "ad_loads": {
                     str(k): {"name": v[2], "detail": v[3]} for k, v in AD_LOAD.items()
                 },
@@ -287,6 +448,35 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/settings":
             self._json({"settings": save_settings(payload)})
+            return
+
+        if path.startswith("/api/storage/"):
+            action = path.rsplit("/", 1)[1]
+            if action not in ("list", "mount", "unmount"):
+                self.send_error(404)
+                return
+            # The password travels inbound only. It reaches the helper and stops there;
+            # _scrub keeps it out of the response even if the helper ever echoed it back.
+            result = nas({**payload, "action": action})
+            self._json(_scrub(result))
+            return
+
+        if path == "/api/browse":
+            # Which folders are inside a mounted share. Typing a path from memory is a
+            # guessing game, and this is a television, not a shell.
+            root = Path(str(payload.get("path") or ""))
+            base = Path("/mnt/tub3")
+            try:
+                resolved = root.resolve()
+                if not resolved.is_relative_to(base.resolve()) or not resolved.is_dir():
+                    self._json({"ok": False, "error": "Not a folder inside a mounted share."})
+                    return
+                folders = sorted(p.name for p in resolved.iterdir()
+                                 if p.is_dir() and not p.name.startswith("."))
+            except OSError as exc:
+                self._json({"ok": False, "error": str(exc)})
+                return
+            self._json({"ok": True, "path": str(resolved), "folders": folders[:200]})
             return
 
         if path == "/api/rebuild":
