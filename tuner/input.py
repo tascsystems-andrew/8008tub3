@@ -17,6 +17,23 @@ CEC remotes and keyboards offer more than four keys, and where they do we accept
 Clickers enumerate as USB HID keyboards. They don't agree on which keys they send, so the
 mapping below is deliberately generous — Logitech, Kensington and the no-name ones all land
 somewhere in it, which means no per-device setup.
+
+Verified on real hardware, 2026-08-08 — an Elan 04f3:1812 wireless presenter, which has no
+button labelled anything like "back":
+
+    rectangle (top)   short  TAB 15          -> SELECT
+                      long   ALT 56 + TAB    -> SELECT
+    up                short  PAGEUP 104      -> UP
+                      long   SHIFT 42 + F5 63 -> SELECT
+    down              short  PAGEDOWN 109    -> DOWN
+                      long   B 48            -> BACK
+    volume up/down           115 / 114       -> VOLUME_UP / VOLUME_DOWN
+    laser                    nothing at all
+
+Every button landed in this map with no changes, and the fourth verb came from the
+long-press of the down arrow — the clicker's "blank screen" function. That is precisely
+what the B entry below exists for. The laser emits no event of any kind, not even a raw
+scancode: it drives its diode in hardware, so it can never be a button.
 """
 
 from __future__ import annotations
