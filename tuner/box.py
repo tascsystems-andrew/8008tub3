@@ -135,7 +135,7 @@ class Box:
         # Leaving the guide: undo its looping playlist, or the next channel inherits it and
         # repeats one programme forever.
         if self._guide is not None:
-            self.player.stop_music()
+            self.player.clear_loop()
             self.player.hide_overlay(overlay_id=4)
             self._guide = None
 
@@ -179,7 +179,7 @@ class Box:
         self.player.hide_overlay(overlay_id=3)
         music = list(getattr(station, "music", []) or [])
         if music:
-            self.player.play_music(music)
+            self.player.play_loop(music, backdrop=True)
         self.channel = channel
         self.bug = BugState()
         self._guide = Guide(guide_channel=channel,
