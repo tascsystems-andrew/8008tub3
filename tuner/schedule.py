@@ -84,7 +84,39 @@ class Airing:
 
     @property
     def remaining(self) -> float:
+        """Seconds left in this *entry* — until the next thing plays, ad or otherwise.
+
+        Used to decide when to advance, where it is exactly right. It is the wrong number to
+        show a viewer, which is what `programme_remaining` is for.
+        """
         return max(0.0, self.program.duration - self.offset)
+
+    @property
+    def programme_remaining(self) -> float:
+        """Wall-clock seconds until this programme actually finishes, ads included.
+
+        A show interrupted by mid-rolls appears in the plan several times — a 23-minute Bill
+        Nye is four 5m45s entries with breaks between them — so the entry countdown says
+        "3 min left" eighteen minutes before the episode ends. It is counting to the next
+        commercial, which reads as counting to the end of the show.
+
+        This walks forward to the last entry that is the same file and includes everything in
+        between, because the ad breaks are part of how long you will be sitting there. That
+        is what someone reading "18 min left" is actually asking.
+        """
+        if not self.plan:
+            return self.remaining
+
+        here = self.plan[self.index].path
+        last = self.index
+        for position in range(self.index + 1, len(self.plan)):
+            if self.plan[position].path == here:
+                last = position
+        if last == self.index:
+            return self.remaining
+
+        total = sum(entry.duration for entry in self.plan[self.index:last + 1])
+        return max(0.0, total - self.offset)
 
     @property
     def seek(self) -> float:

@@ -490,10 +490,20 @@ def run(args: argparse.Namespace) -> int:
     # INSERT OR REPLACE, but the only unique constraint is the autoincrement id and every
     # index is non-UNIQUE, so the conflict clause can never fire.
     import sqlite3  # noqa: PLC0415
+    removed = 0
     with sqlite3.connect("runtime/fs42_fluid.db") as conn:
-        removed = conn.execute(
-            "DELETE FROM liquid_blocks WHERE station = ?", (name,)
-        ).rowcount
+        try:
+            removed = conn.execute(
+                "DELETE FROM liquid_blocks WHERE station = ?", (name,)
+            ).rowcount
+        except sqlite3.OperationalError:
+            # The table does not exist yet, which is the state of every *first* build on a
+            # fresh box: upstream creates liquid_blocks when it writes the first schedule,
+            # well after the catalog. There is nothing to clear, which is the correct
+            # answer — but the unguarded DELETE turned the very first run into a traceback
+            # after forty minutes of cataloguing, and only the first run, so it survived
+            # every rebuild during development.
+            pass
     if removed > 0:
         print(f"  schedule    cleared {removed} existing block(s)")
 

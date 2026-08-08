@@ -32,6 +32,7 @@ import json
 import re
 import statistics
 from dataclasses import asdict, dataclass, field
+from datetime import date
 from pathlib import Path
 
 from .bootstrap import VIDEO_SUFFIXES
@@ -54,7 +55,41 @@ LEAF_MARKERS = ("kids", "children", "preschool", "toddler", "cartoon", "cartoons
 # that otherwise looks safe.
 ADULT_MARKERS = ("unrated", "uncut", "extended", "nc-17", "nc17")
 
-YEAR = re.compile(r"\((19|20)\d{2}\)")
+YEAR_BRACKETED = re.compile(r"[(\[](19|20)\d{2}[)\]]")
+YEAR_TOKEN = re.compile(r"(?<!\d)(19|20)\d{2}(?!\d)")
+
+# Release years only. The 2049 in "Blade Runner 2049" is part of a title, and a ceiling is
+# what tells the two apart; next year rather than this one leaves room for a title named
+# ahead of its release.
+_YEAR_CEILING = date.today().year + 1
+
+
+def year_of(name: str) -> int | None:
+    """The release year a folder or file name is claiming, or None.
+
+    This library writes years three ways — `Ace Ventura (1994)`, `Goosebumps 2023`, and
+    scene style `Airplane.1980.2160p` — and reading only the bracketed form meant the year
+    was very often not read at all: **no** folder in the TV library brackets it. That is the
+    mechanism behind "a scheduler cannot tell them apart from the folder name". The 2023
+    `Goosebumps` does say 2023 right there in the folder name; nothing was looking.
+
+    Two guards keep a number in a title from being read as a year. A bracketed year always
+    wins, so `Blade Runner 2049 (2017)` is 2017. Failing that, a bare token counts only if it
+    is no later than next year and is not the entire name — which is what separates `Blade
+    Runner 2049` and `1917` from a genuine release year.
+    """
+    bracketed = YEAR_BRACKETED.search(name)
+    if bracketed:
+        return int(bracketed.group(0)[1:-1])
+
+    stripped = name.strip()
+    for match in YEAR_TOKEN.finditer(stripped):
+        if match.group(0) == stripped:
+            continue  # the title *is* a year — "1917"
+        value = int(match.group(0))
+        if value <= _YEAR_CEILING:
+            return value
+    return None
 
 
 @dataclass
@@ -200,23 +235,21 @@ def scan(roots: list[Path], *, samples: int = 3, probe_durations: bool = True) -
             minutes, sampled = (_median_minutes(files, samples) if probe_durations
                                 else (None, 0))
             rating, why = classify(top, child.name, child)
-            year = YEAR.search(child.name)
             manifest.series.append(Series(
                 name=child.name, path=str(child), top_folder=top,
                 episodes=len(files), minutes_median=minutes, sampled=sampled,
                 rating=rating, rating_reason=why,
                 kind=_kind(minutes, len(files)),
-                year=int(year.group(0)[1:-1]) if year else None,
+                year=year_of(child.name),
             ))
 
         for film in sorted(loose, key=lambda p: p.name.lower())[:400]:
             rating, why = classify(top, film.stem, film)
-            year = YEAR.search(film.name)
             manifest.series.append(Series(
                 name=film.stem, path=str(film), top_folder=top,
                 episodes=1, minutes_median=None, sampled=0,
                 rating=rating, rating_reason=why, kind="film",
-                year=int(year.group(0)[1:-1]) if year else None,
+                year=year_of(film.name),
             ))
 
     return manifest

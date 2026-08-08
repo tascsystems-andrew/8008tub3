@@ -195,14 +195,22 @@ def wait_for_channels(player: MpvPlayer, db: Path, web_port: int,
             if building_since:
                 done, total = _build_progress(db)
                 card.headline = "Building your channel"
-                if total:
-                    card.progress = min(1.0, done / total)
+                # `done` can exceed `total`, and the reason is worth encoding rather than
+                # clamping away: the catalog table is cumulative across builds, so it still
+                # holds rows for files a *previous* build catalogued, while the pool total
+                # is always current. Once the two cross, the ratio is comparing different
+                # sets and any percentage it produces is fiction. Say what is true instead.
+                if total and done < total:
+                    card.progress = done / total
                     left = ""
                     elapsed = now - building_since
                     if done > 20 and elapsed > 30:
                         remaining = (total - done) / (done / elapsed)
                         left = f" — about {max(1, int(remaining // 60))} min left"
                     card.detail = f"Read {done:,} of {total:,} files{left}"
+                elif total:
+                    card.progress = None
+                    card.detail = "Cataloguing your library"
                 else:
                     card.progress = None
                     minutes = int((now - building_since) // 60)

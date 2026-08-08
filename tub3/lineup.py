@@ -43,6 +43,18 @@ from .bootstrap import (
 )
 
 
+# The guide lives on channel 2, and channel 1 is left unpopulated. Andrew's instruction,
+# and the reason is the dial he actually remembers: Vancouver cable had no channel 1, so a
+# box trying to feel like that dial should not invent one.
+#
+# Reserved as a constant rather than a convention because the dial is *proposed* by a model
+# reading a manifest, and "2 is spoken for, 1 does not exist" is exactly the sort of thing
+# that gets forgotten when the interesting question is which sitcoms belong at dinner. Same
+# shape as the rating audit: the judgement is delegated, the invariant is not.
+GUIDE_CHANNEL = 2
+UNUSED_CHANNEL = 1
+
+
 @dataclass
 class Daypart:
     """Which tag airs during which hours. `hours` is inclusive-start, exclusive-end."""
@@ -63,6 +75,9 @@ class Channel:
     number: int
     name: str
     rating: str = "late"
+    # "standard" — scheduled content, the only kind this module can build.
+    # "guide"    — the scrolling guide on GUIDE_CHANNEL, rendered by guidecast, not by us.
+    kind: str = "standard"
     # tag -> the folders whose episodes belong to it
     sources: dict[str, list[str]] = field(default_factory=dict)
     dayparts: list[Daypart] = field(default_factory=list)
@@ -106,6 +121,7 @@ def load(path: Path) -> list[Channel]:
             number=int(raw["number"]),
             name=raw["name"],
             rating=raw.get("rating", "late"),
+            kind=raw.get("kind", "standard"),
             sources={k: list(v) for k, v in raw.get("sources", {}).items()},
             dayparts=dayparts,
             increment=raw.get("increment"),
@@ -118,6 +134,35 @@ def load(path: Path) -> list[Channel]:
 
 class UnsafeLineup(ValueError):
     """A proposed lineup would put adult content where children can reach it."""
+
+
+class ReservedChannel(ValueError):
+    """A proposed lineup claims a channel number that is spoken for."""
+
+
+def check_reserved(channels: list[Channel]) -> list[str]:
+    """Refuse a lineup that puts anything but the guide on `GUIDE_CHANNEL`.
+
+    Separate from `audit` on purpose. That one is a safety rule and raising it means content
+    was about to reach a child; this one is a numbering rule and means the dial is wrong.
+    Collapsing them would make `UnsafeLineup` mean two different things, and the day it fires
+    you want to know which of the two happened without reading the message.
+
+    Returns human-readable problems; empty means the numbering is fine.
+    """
+    problems: list[str] = []
+    for channel in channels:
+        if channel.number == GUIDE_CHANNEL and channel.kind != "guide":
+            problems.append(
+                f"channel {GUIDE_CHANNEL} is reserved for the scrolling guide, but "
+                f"{channel.name!r} claims it — give that channel another number"
+            )
+        if channel.kind == "guide" and channel.number != GUIDE_CHANNEL:
+            problems.append(
+                f"the guide is channel {GUIDE_CHANNEL}, but {channel.name!r} is a guide "
+                f"channel on {channel.number} — move it to {GUIDE_CHANNEL}"
+            )
+    return problems
 
 
 def audit(channels: list[Channel]) -> list[str]:
@@ -235,6 +280,17 @@ def _day_template(channel: Channel) -> dict[str, dict]:
 
 def compile_station(channel: Channel, media_root: Path, *, pools: dict[str, str]) -> dict:
     """One FieldStation42 station config."""
+    if channel.kind == "guide":
+        # Upstream *has* a `network_type: "guide"`, and it is a trap here: it is a Tkinter
+        # app (`fs42/guide_tk.py`, `GuideApp(tk.Tk)`) driven from upstream's own player,
+        # which we do not run. Tk needs a display server; this box boots to mpv on DRM with
+        # no X at all, so emitting that config would produce a channel that cannot draw.
+        # The guide is guidecast's job — headless Chromium to HLS, per the build spec.
+        raise ValueError(
+            f"channel {channel.number} is the scrolling guide; it is rendered by guidecast "
+            f"and has no station config. Upstream's network_type 'guide' is Tk-based and "
+            f"will not run on a DRM-only box."
+        )
     commercial_tag = pools.get(channel.rating)
     if commercial_tag is None:
         # Fall back down the ladder: asking for family on a kids-only library gets kids.
@@ -278,12 +334,19 @@ def apply(lineup_path: Path, media_root: Path, ads_root: Path) -> list[tuple[Cha
     media_root.mkdir(parents=True, exist_ok=True)
     channels = load(lineup_path)
 
-    # Before anything is written. A lineup that fails this is not partially applied.
+    # Both checks before anything is written. A lineup that fails either is not partially
+    # applied.
     problems = audit(channels)
     if problems:
         raise UnsafeLineup(
             "This lineup would place content not marked for children on a channel rated "
             "for children:\n  " + "\n  ".join(problems)
+        )
+
+    clashes = check_reserved(channels)
+    if clashes:
+        raise ReservedChannel(
+            "This lineup claims a reserved channel number:\n  " + "\n  ".join(clashes)
         )
 
     pools = build_rating_pools(media_root, ads_root)
@@ -300,6 +363,13 @@ def apply(lineup_path: Path, media_root: Path, ads_root: Path) -> list[tuple[Cha
     conf_dir = VENDOR / "confs"
     conf_dir.mkdir(parents=True, exist_ok=True)
     for channel in channels:
+        # The guide has no pool and no station config — guidecast renders and streams it.
+        # Returned anyway so it appears in the dial the CLI prints: a channel missing from
+        # that list reads as an omission, which is the wrong thing to imply about the one
+        # channel that is deliberately built elsewhere.
+        if channel.kind == "guide":
+            out.append((channel, 0))
+            continue
         conf = compile_station(channel, media_root, pools=pools)
         (conf_dir / f"{channel.station}.json").write_text(json.dumps(conf, indent=4))
         episodes = sum(built.get(tag, 0) for tag in channel.sources)
@@ -319,16 +389,30 @@ def main(argv: list[str] | None = None) -> int:
 
     channels = load(args.lineup)
     problems = audit(channels)
+    clashes = check_reserved(channels)
     if args.dry_run:
         print()
+        # Both sections, always. `apply` raises on the first of the two it meets, which is
+        # right for a guard but wrong for a dry run — the point of asking first is to come
+        # away with the whole list, not to fix one thing and rediscover the other.
         if problems:
             print("  REFUSED — this lineup is not safe to apply:\n")
             for problem in problems:
                 print(f"    ! {problem}")
             print()
+        if clashes:
+            print("  REFUSED — this lineup claims a reserved channel:\n")
+            for clash in clashes:
+                print(f"    ! {clash}")
+            print()
+        if problems or clashes:
             return 1
         print("  safety audit: passed\n")
         for channel in channels:
+            if channel.kind == "guide":
+                print(f"  {channel.number:>3}  {channel.name:<22} guide     "
+                      f"rendered by guidecast")
+                continue
             breaks = "no mid-rolls" if channel.breaks == "end" else channel.breaks
             ads = "ad-free" if channel.commercial_free else channel.rating
             print(f"  {channel.number:>3}  {channel.name:<22} {ads:<8} "
@@ -340,10 +424,15 @@ def main(argv: list[str] | None = None) -> int:
 
     results = apply(args.lineup, args.media_root, args.ads)
     print()
+    written = 0
     for channel, episodes in results:
+        if channel.kind == "guide":
+            print(f"  {channel.number:>3}  {channel.name:<24}    guidecast")
+            continue
+        written += 1
         hours = "—"
         print(f"  {channel.number:>3}  {channel.name:<24} {episodes:>5} items  {hours}")
-    print(f"\n  {len(results)} station config(s) written to {VENDOR / 'confs'}\n")
+    print(f"\n  {written} station config(s) written to {VENDOR / 'confs'}\n")
     return 0
 
 

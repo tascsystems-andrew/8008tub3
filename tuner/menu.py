@@ -8,6 +8,9 @@ contrast subtlety to read from the sofa, too many gestures to drive from a click
 Rules this enforces structurally:
 
 - **Four verbs only.** Up, down, select, back. Every screen must be completable with them.
+- **Two verbs, really.** Every screen carries its own `Back` item, so up/down/select is
+  sufficient to reach anywhere and get out again. The BACK verb still works and is still the
+  fast way, but nothing *depends* on it — see `Screen.__post_init__` for why that matters.
 - **No text entry, ever.** Anything needing a string — Wi-Fi password, SMB credentials, share
   paths — is not a menu item. It lives in the browser setup UI and appears here only as
   status. Typing a password on a TV with four buttons is not a UX, it is a hostage situation.
@@ -34,6 +37,7 @@ class ItemKind(Enum):
     CHOICE = "choice"      # cycles through a fixed list — clicker-safe
     ACTION = "action"
     INFO = "info"          # read-only, not selectable
+    BACK = "back"          # leaves the screen; every screen gets one, added by Screen itself
 
 
 @dataclass
@@ -61,6 +65,37 @@ class Screen:
     title: str
     items: list[Item]
     cursor: int = 0
+    exit_label: str = "Back"
+    exit_help: str = "Return to the previous screen"
+
+    def __post_init__(self) -> None:
+        """Give every screen its own way out, as an ordinary item.
+
+        The remote has no BACK button. Verified on the Elan clicker: the fourth verb exists
+        only as the *long press* of the down arrow — the "blank screen" function, which is
+        both undiscoverable and, on a three-button clicker, absent altogether. A screen that
+        can only be left by pressing BACK is a screen some remotes cannot leave, and a TV you
+        can get stuck in is worse than one with fewer settings.
+
+        So leaving is reachable with the two verbs every remote does have. BACK still works
+        and is still faster; it is now a shortcut rather than the only door.
+
+        Appended here rather than by each builder because "every screen" has to be a
+        structural guarantee — a submenu added later cannot forget it. The list is rebuilt
+        rather than appended to, so constructing a Screen twice from the same
+        `Item.children` cannot end up with two of them.
+        """
+        if not any(item.kind is ItemKind.BACK for item in self.items):
+            self.items = [*self.items,
+                          Item(self.exit_label, ItemKind.BACK, help=self.exit_help)]
+
+        # Start on something you can actually press. NETWORK and ABOUT are entirely INFO
+        # rows, so a cursor resting at index 0 draws no marker and swallows SELECT — the
+        # screen reads as frozen. There is always at least one selectable item now, because
+        # the way out is one.
+        current = self.items[self.cursor] if self.cursor < len(self.items) else None
+        if current is None or not current.selectable:
+            self.move(1)
 
     def move(self, delta: int) -> None:
         if not self.items:
@@ -105,19 +140,29 @@ class Menu:
             self.screen.move(1)
             self.status = ""
         elif event.verb is Verb.BACK:
-            if len(self.stack) > 1:
-                self.stack.pop()
-            else:
-                self.visible = False
-            self.status = ""
+            self._leave()
         elif event.verb is Verb.SELECT:
             self._activate()
+
+    def _leave(self) -> None:
+        """Up one level, or out of the menu entirely when already at the root.
+
+        Shared by the BACK verb and the `Back` item so the two can never diverge — the item
+        is the one every remote can reach, and it must do exactly what the button does.
+        """
+        if len(self.stack) > 1:
+            self.stack.pop()
+        else:
+            self.visible = False
+        self.status = ""
 
     def _activate(self) -> None:
         item = self.screen.current
         if item is None:
             return
-        if item.kind is ItemKind.SUBMENU:
+        if item.kind is ItemKind.BACK:
+            self._leave()
+        elif item.kind is ItemKind.SUBMENU:
             self.stack.append(Screen(item.label, item.children))
             self.status = ""
         elif item.kind is ItemKind.CHOICE:
@@ -142,6 +187,10 @@ class Menu:
         rows.append("║" + " " * inner + "║")
 
         for index, item in enumerate(screen.items):
+            # A blank row before the way out, so it reads as leaving the screen rather than
+            # as one more setting on it.
+            if item.kind is ItemKind.BACK:
+                rows.append("║" + " " * inner + "║")
             marker = "►" if index == screen.cursor and item.selectable else " "
             label = item.label
             value = item.value or ""
@@ -168,7 +217,9 @@ class Menu:
             rows.append("║" + text.ljust(inner) + "║")
             rows.append("╠" + "═" * inner + "╣")
 
-        hint = "  ▲▼ MOVE     ● SELECT     ◄ BACK"
+        # No BACK in the hint. Naming a button the remote does not have is worse than saying
+        # nothing — the way out is on screen, one row up.
+        hint = "  ▲▼ MOVE     ● SELECT"
         rows.append("║" + hint.ljust(inner) + "║")
         rows.append("╚" + "═" * inner + "╝")
         return rows
@@ -228,6 +279,9 @@ class Menu:
 
         y = top + 150
         for index, item in enumerate(screen.items):
+            # Set the way out apart from the settings above it.
+            if item.kind is ItemKind.BACK:
+                y += 18
             selected = index == screen.cursor and item.selectable
             if selected:
                 events.append(rect(left + 18, y - 26, right - 18, y + 26, amber, "&HD8&"))
@@ -245,7 +299,7 @@ class Menu:
             events.append(text(left + 40, bottom - 108, status[:74], size=28, align=4))
 
         events.append(text(left + 40, bottom - 36,
-                           "▲▼ MOVE      ● SELECT      ◀ BACK",
+                           "▲▼ MOVE      ● SELECT",
                            size=30, align=4))
 
         return "\n".join(events)
@@ -299,10 +353,12 @@ def build_root(state: dict) -> Screen:
         Item("Uptime", ItemKind.INFO, state.get("uptime", "3d 04:12")),
     ]
 
+    # The root's way out leaves the menu altogether rather than going up a level, so it says
+    # so. "Back" on the top screen would be a lie about where it takes you.
     return Screen("SETUP", [
         Item("PICTURE", ItemKind.SUBMENU, children=picture),
         Item("AUDIO", ItemKind.SUBMENU, children=audio),
         Item("CHANNELS", ItemKind.SUBMENU, children=channels),
         Item("NETWORK", ItemKind.SUBMENU, children=network),
         Item("ABOUT", ItemKind.SUBMENU, children=about),
-    ])
+    ], exit_label="EXIT TO TV", exit_help="Close the menu and go back to what's on")

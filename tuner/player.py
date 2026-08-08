@@ -300,12 +300,26 @@ class MpvPlayer:
 
     # ---------- tuning ----------
 
-    def tune(self, path: Path, offset: float, *, timeout: float = 8.0) -> TuneResult:
+    # Below this, a keyframe-rounded seek is a serious error rather than an invisible one.
+    # A commercial is 10-30 seconds and may carry one keyframe every few seconds, so rounding
+    # can land past the end — mpv reports the file finished, the box advances, and tuning in
+    # during a break appears to skip to the next advert. In a 23-minute programme the same
+    # rounding is unnoticeable, which is why hr-seek=no is right there and wrong here.
+    EXACT_SEEK_UNDER = 90.0
+
+    def tune(self, path: Path, offset: float, *, timeout: float = 8.0,
+             duration: float | None = None) -> TuneResult:
         """Punch into a file at `offset`. Returns time to actual picture."""
         if not self.alive:
             return TuneResult(False, 0.0, "mpv exited")
         self._read_messages(0.0)  # discard anything stale before we start timing
         start = time.perf_counter()
+
+        # Exact seeking for short items, keyframe seeking for long ones. Set per load rather
+        # than at launch: the cost of an exact seek scales with how far into the file it is,
+        # and on something this short it is a few frames of decoding.
+        want_exact = duration is not None and duration <= self.EXACT_SEEK_UNDER and offset > 0.5
+        self._command(["set_property", "hr-seek", "yes" if want_exact else "no"], wait=False)
 
         # Setting start= as a load option lets mpv seek during open, rather than opening,
         # decoding from zero, and then seeking.
