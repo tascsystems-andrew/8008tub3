@@ -193,10 +193,21 @@ def wait_for_channels(player: MpvPlayer, db: Path, web_port: int,
 
             card.building = bool(building_since)
             if building_since:
-                minutes = int((now - building_since) // 60)
+                done, total = _build_progress(db)
                 card.headline = "Building your channel"
-                card.detail = (f"Reading your library over the network"
-                               + (f" — {minutes} min so far" if minutes else ""))
+                if total:
+                    card.progress = min(1.0, done / total)
+                    left = ""
+                    elapsed = now - building_since
+                    if done > 20 and elapsed > 30:
+                        remaining = (total - done) / (done / elapsed)
+                        left = f" — about {max(1, int(remaining // 60))} min left"
+                    card.detail = f"Read {done:,} of {total:,} files{left}"
+                else:
+                    card.progress = None
+                    minutes = int((now - building_since) // 60)
+                    card.detail = ("Reading your library over the network"
+                                   + (f" — {minutes} min so far" if minutes else ""))
             else:
                 card.headline = "No channels yet"
                 card.detail = "Open the settings page to point this at your shows."
@@ -206,6 +217,41 @@ def wait_for_channels(player: MpvPlayer, db: Path, web_port: int,
         except (OSError, BrokenPipeError, RuntimeError):
             return None
         time.sleep(poll)
+
+
+MEDIA_ROOT = Path(__file__).resolve().parent.parent / "media"
+
+
+def _build_progress(db: Path) -> tuple[int, int]:
+    """(files catalogued, files to catalogue) — a real number for the screen.
+
+    The total comes free: the symlink pools are built *before* cataloguing starts, and they
+    live on the local disk, so counting them costs nothing. The done count is rows in the
+    catalog table. No coordination between the two processes, no progress file to go stale.
+
+    Worth having because the honest rate over a network share is about one file a second —
+    twenty-plus minutes for a modest library — and "reading your library" with no number
+    attached is indistinguishable from a hang for the entire duration.
+    """
+    total = 0
+    try:
+        for pool in MEDIA_ROOT.iterdir():
+            if pool.is_dir():
+                total += sum(1 for _ in pool.iterdir())
+    except OSError:
+        return 0, 0
+
+    done = 0
+    if db.exists():
+        try:
+            conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+            try:
+                done = conn.execute("SELECT COUNT(*) FROM file_meta").fetchone()[0]
+            finally:
+                conn.close()
+        except sqlite3.DatabaseError:
+            done = 0
+    return done, total
 
 
 def _rebuild_running() -> bool:

@@ -67,6 +67,8 @@ class Standby:
     headline: str = "No channels yet"
     detail: str = "Open the settings page to point this at your shows."
     building: bool = False
+    # None means "working, no idea how long"; a fraction means a real bar.
+    progress: float | None = None
 
     RES = (1920, 1080)
 
@@ -158,10 +160,20 @@ class Standby:
         bar_w, bar_h, bar_y = 620, 6, 836
         left = cx - bar_w // 2
         events.append(rect(left, bar_y, left + bar_w, bar_y + bar_h, "&H303030&"))
-        travel = (now % 3.0) / 3.0
-        knob = 150
-        x = int(left + travel * (bar_w - knob))
-        events.append(rect(x, bar_y, x + knob, bar_y + bar_h, PHOSPHOR))
+        if self.progress is None:
+            # Indeterminate: a knob that sweeps, so the screen is never still.
+            travel = (now % 3.0) / 3.0
+            knob = 150
+            x = int(left + travel * (bar_w - knob))
+            events.append(rect(x, bar_y, x + knob, bar_y + bar_h, PHOSPHOR))
+        else:
+            filled = int(bar_w * max(0.0, min(1.0, self.progress)))
+            if filled:
+                events.append(rect(left, bar_y, left + filled, bar_y + bar_h, PHOSPHOR))
+            # A short bright leading edge, so a slow bar still visibly moves.
+            edge = min(left + bar_w, left + filled + 4)
+            events.append(rect(max(left, edge - 4), bar_y - 2, edge, bar_y + bar_h + 2,
+                               GOLD))
 
         if self.web_url:
             events.append(text(cx, 928, self.web_url, size=44, bold=1, colour=GOLD))
