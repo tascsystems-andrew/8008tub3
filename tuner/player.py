@@ -94,6 +94,7 @@ class MpvPlayer:
         self._buffer = b""
         self._request_id = 0
         self._fullscreen_applied = False
+        self._backdrop = False
         self.alive = True
 
     # ---------- lifecycle ----------
@@ -120,8 +121,19 @@ class MpvPlayer:
             # television anyway.
             "--osc=no",
             "--no-input-default-bindings",
+            # Frame pacing, not throughput. A 23.976 fps film on a 30 Hz output cannot divide
+            # evenly, so with mpv's default `video-sync=audio` some frames are held for one
+            # refresh and some for two. Nothing drops, no cache starves, the CPU sits idle —
+            # and it still looks choppy, which is why this reads as a buffering problem and
+            # is not one. `display-resample` retimes playback to the display's actual clock
+            # and resamples audio to match, which is the difference between a judder every
+            # few frames and an inaudible pitch change.
+            "--video-sync=display-resample",
             "--cache=yes",
             "--demuxer-max-bytes=64MiB",
+            # Seconds, not bytes. 64 MiB is a couple of minutes of a DVD rip and eight
+            # seconds of a 4K remux, so a byte cap alone buffers the files that need it least.
+            "--demuxer-readahead-secs=20",
             f"--input-ipc-server={self.socket_path}",
         ]
 
@@ -354,8 +366,21 @@ class MpvPlayer:
 
         return TuneResult(True, latency_ms)
 
-    def play_music(self, paths: list[Path], *, timeout: float = 8.0) -> TuneResult:
-        """Loop a playlist of audio, for the guide channel.
+    # A synthetic video track, for channels whose content is audio only.
+    #
+    # An ASS overlay is composited onto the video surface, so with an audio-only file there is
+    # nothing to draw on and the listings simply do not appear — the guide came up playing its
+    # music with an empty screen, and every counter said healthy because nothing had failed.
+    # `--force-window` is not enough: it makes a window, not a surface for the OSD.
+    #
+    # `lavfi-complex` synthesises one from a colour source at 12 fps, which costs nothing to
+    # "decode" and gives libass something to render into. The colour is the house ink, so the
+    # frame behind the grid matches the grid's own background exactly.
+    BACKDROP = "[aid1]anull[ao];color=c=0x0E0C14:s=1920x1080:r=12[vo]"
+
+    def play_loop(self, paths: list[Path], *, backdrop: bool = False,
+                  timeout: float = 8.0) -> TuneResult:
+        """Loop a playlist forever — the guide's music bed, or an ambiance channel's video.
 
         Deliberately not `tune`. That one punches into a single file at an offset because a
         scheduled programme is somewhere in the middle of itself when you arrive; the guide's
@@ -384,16 +409,29 @@ class MpvPlayer:
         for extra in paths[1:]:
             self._command(["loadfile", str(extra), "append"], wait=False)
 
+        # After the load: setting it before is discarded when the file is replaced.
+        if backdrop:
+            self._command(["set_property", "lavfi-complex", self.BACKDROP], wait=False)
+            self._backdrop = True
+
         self._command(["set_property", "pause", False], wait=False)
         started = self._wait_for_event("playback-restart", timeout)
         latency_ms = (time.perf_counter() - start) * 1000.0
         return TuneResult(started, latency_ms, None if started else "no playback-restart")
 
-    def stop_music(self) -> None:
-        """Undo `play_music`, so a scheduled channel does not inherit its looping."""
+    def clear_loop(self) -> None:
+        """Undo `play_loop`, so a scheduled channel does not inherit its looping or backdrop.
+
+        The backdrop especially: a synthetic video track left in place would sit in front of
+        the next channel's actual picture, which is a far louder failure than the blank guide
+        it was added to fix.
+        """
         if not self.alive:
             return
         self._command(["set_property", "loop-playlist", "no"], wait=False)
+        if self._backdrop:
+            self._command(["set_property", "lavfi-complex", ""], wait=False)
+            self._backdrop = False
 
     # The coordinate space overlay ASS is authored in. Passing 0,0 here lets mpv choose,
     # which means the same menu renders at wildly different sizes depending on the display —
