@@ -477,9 +477,14 @@ async function refresh(){
   $('#sub').textContent = `${s.channels.length} channel(s) · ${s.settings.cooldown_minutes} min ad cooldown`;
   $('#adload').value = s.settings.ad_load;
   $('#fullscreen').checked = !!s.settings.fullscreen;
-  PROGRAMS = (s.settings.programs_dirs||[]).slice();
-  COMMERCIALS = s.settings.commercials_dir||'';
-  paintFolders();
+  // Only take the server's copy when there is nothing unsaved to lose. This poll runs
+  // every 15s, and without the guard it silently reverted a folder you had just added —
+  // which reads as "the box keeps forgetting my folders".
+  if(!DIRTY){
+    PROGRAMS = (s.settings.programs_dirs||[]).slice();
+    COMMERCIALS = s.settings.commercials_dir||'';
+    paintFolders();
+  }
   paintStorage(s.storage);
   paintLoad();
   const inv=s.inventory;
@@ -524,7 +529,18 @@ function paintFolders(){
     : '<div class=hint>None yet.</div>';
   const cx=$('#commx'); if(cx) cx.onclick=()=>{COMMERCIALS=''; paintFolders(); dirty();};
 }
-function dirty(){ $('#saved').textContent='Not saved yet — press Save.'; }
+let DIRTY=false;
+// Folder choices save the moment they change. Making someone press Save after picking a
+// folder is a step whose only purpose is to be forgotten — and forgetting it looked
+// exactly like the box losing the folder. Rebuild stays explicit: it takes a minute.
+async function dirty(){
+  DIRTY=true;
+  $('#saved').textContent='Saving…';
+  await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({programs_dirs:PROGRAMS,commercials_dir:COMMERCIALS})});
+  DIRTY=false;
+  $('#saved').innerHTML='Saved. <b class=val>Rebuild schedule</b> to put it on air.';
+}
 
 // --- folder picker -------------------------------------------------------------------
 let PICKMODE='programs', PICKPATH='', PICKPARENT=null;
