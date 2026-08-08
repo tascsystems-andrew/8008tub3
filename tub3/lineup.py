@@ -116,6 +116,47 @@ def load(path: Path) -> list[Channel]:
     return sorted(channels, key=lambda c: c.number)
 
 
+class UnsafeLineup(ValueError):
+    """A proposed lineup would put adult content where children can reach it."""
+
+
+def audit(channels: list[Channel]) -> list[str]:
+    """Refuse a lineup that puts unrated content on a channel rated for children.
+
+    This exists because the dial is meant to be *proposed* by a model reading a manifest,
+    and a model can be wrong. Taste is a good thing to delegate; this is not. So the
+    creative decision — which shows belong together, what the channel is called, where the
+    dinner strip sits — is delegated, and this one rule is not:
+
+        a channel rated `kids` or `family` may only draw from sources the manifest rated
+        `kids`, and the check is by path.
+
+    Deliberately not a warning. A warning is something that scrolls past at eleven at night
+    while you are debugging something else, and the whole point is that this failure mode
+    must be impossible rather than unlikely. `apply` will not write a config until this
+    returns empty.
+
+    Returns human-readable problems; empty means safe.
+    """
+    from .manifest import classify
+
+    problems: list[str] = []
+    for channel in channels:
+        if channel.rating not in ("kids", "family"):
+            continue
+        for tag, folders in channel.sources.items():
+            for folder in folders:
+                path = Path(folder)
+                rating, why = classify(path.parent.name, path.name, path)
+                if rating != "kids":
+                    problems.append(
+                        f"channel {channel.number} ({channel.name!r}) is rated "
+                        f"{channel.rating!r} but tag {tag!r} draws from {folder!r}, "
+                        f"which is rated {rating} — {why}"
+                    )
+    return problems
+
+
 def _link_pool(media_root: Path, tag: str, folders: list[str]) -> int:
     """Build a tag directory of symlinks to every episode in the given folders."""
     if tag.lower() in RESERVED_NAMES:
@@ -212,6 +253,14 @@ def apply(lineup_path: Path, media_root: Path, ads_root: Path) -> list[tuple[Cha
     media_root.mkdir(parents=True, exist_ok=True)
     channels = load(lineup_path)
 
+    # Before anything is written. A lineup that fails this is not partially applied.
+    problems = audit(channels)
+    if problems:
+        raise UnsafeLineup(
+            "This lineup would place content not marked for children on a channel rated "
+            "for children:\n  " + "\n  ".join(problems)
+        )
+
     pools = build_rating_pools(media_root, ads_root)
     make_station_ids(media_root / BUMP_TAG, 0, "BoobTube")
 
@@ -244,8 +293,16 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     channels = load(args.lineup)
+    problems = audit(channels)
     if args.dry_run:
         print()
+        if problems:
+            print("  REFUSED — this lineup is not safe to apply:\n")
+            for problem in problems:
+                print(f"    ! {problem}")
+            print()
+            return 1
+        print("  safety audit: passed\n")
         for channel in channels:
             breaks = "no mid-rolls" if channel.breaks == "end" else channel.breaks
             ads = "ad-free" if channel.commercial_free else channel.rating
