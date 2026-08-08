@@ -183,11 +183,62 @@ def build_rating_pools(media_root: Path, ads: Path) -> dict[str, str]:
     return pools
 
 
+def _pool_folders(media_root: Path, tag: str, folders: list[Path]) -> int:
+    """A tag directory of symlinks, one per episode, drawn from several folders.
+
+    Needed because a library is rarely one folder. A viewer picks the five they want on a
+    channel and leaves the rest — home video, downloads in progress, the kids' stuff — out
+    of it, and pointing the tag at a common parent would sweep all of that in.
+
+    Symlinks rather than copies: nothing is duplicated, one series can appear on several
+    channels, and realpath still collapses to a single file so the ad cooldown and the
+    dedupe index keep working across channels.
+    """
+    pool = media_root / tag
+    if pool.exists() or pool.is_symlink():
+        # It may be a symlink from the single-folder path taken on a previous build.
+        if pool.is_symlink():
+            pool.unlink()
+        else:
+            for stale in pool.iterdir():
+                if stale.is_symlink():
+                    stale.unlink()
+    pool.mkdir(parents=True, exist_ok=True)
+
+    linked = 0
+    for folder in folders:
+        if not folder.exists():
+            continue
+        # Prefix with the folder name so two series with an S01E01 cannot collide.
+        prefix = _normalise(folder.name)[:28]
+        for item in sorted(folder.rglob("*")):
+            if not item.is_file() or item.name.startswith("."):
+                continue
+            if item.suffix.lower() not in VIDEO_SUFFIXES:
+                continue
+            link = pool / f"{prefix}__{item.name}"
+            if not link.exists():
+                try:
+                    link.symlink_to(item.resolve())
+                except OSError:
+                    continue
+            linked += 1
+    return linked
+
+
 def arrange_media(
-    media_root: Path, programs: Path, ads: Path, channel: int, name: str
+    media_root: Path, programs: list[Path] | Path, ads: Path, channel: int, name: str
 ) -> dict[str, str]:
     media_root.mkdir(parents=True, exist_ok=True)
-    _link(programs, media_root / SHOWS_TAG)
+
+    folders = [programs] if isinstance(programs, Path) else list(programs)
+    if len(folders) == 1:
+        # One folder stays a plain symlink: no thousands of links to create, and the
+        # user's own directory structure shows through unchanged.
+        _link(folders[0], media_root / SHOWS_TAG)
+    else:
+        count = _pool_folders(media_root, SHOWS_TAG, folders)
+        print(f"  shows       {count:>4} episodes from {len(folders)} folders")
 
     pools = build_rating_pools(media_root, ads)
     if pools:
@@ -254,7 +305,7 @@ STANDARD_BLOCKS = (10, 15, 30, 60, 90, 120)
 CONTENT_SHARE = 0.75
 
 
-def choose_increment(programs: Path) -> tuple[int, float, int]:
+def choose_increment(programs: list[Path] | Path) -> tuple[int, float, int]:
     """Pick the schedule block length from how long the programmes actually are.
 
     Returns (minutes, median program seconds, program count). This is deliberately derived
@@ -264,18 +315,20 @@ def choose_increment(programs: Path) -> tuple[int, float, int]:
     """
     from mediakit.ffmpeg import probe  # noqa: PLC0415
 
+    folders = [programs] if isinstance(programs, Path) else list(programs)
     durations = []
-    for path in sorted(programs.rglob("*")):
-        if not path.is_file() or path.suffix.lower() not in VIDEO_SUFFIXES:
-            continue
-        if path.name.startswith("."):
-            continue
-        try:
-            info = probe(path)
-        except Exception:  # noqa: BLE001
-            continue
-        if info.duration > 0:
-            durations.append(info.duration)
+    for folder in folders:
+        for path in sorted(folder.rglob("*")):
+            if not path.is_file() or path.suffix.lower() not in VIDEO_SUFFIXES:
+                continue
+            if path.name.startswith("."):
+                continue
+            try:
+                info = probe(path)
+            except Exception:  # noqa: BLE001
+                continue
+            if info.duration > 0:
+                durations.append(info.duration)
 
     if not durations:
         return 30, 0.0, 0
@@ -316,8 +369,13 @@ def check_layout(media_root: Path) -> list[str]:
 def run(args: argparse.Namespace) -> int:
     media_root = args.media_root.resolve()
     name = args.name or f"CHANNEL {args.channel}"
-    pools = arrange_media(media_root, args.programs.resolve(), args.ads.resolve(),
-                          args.channel, name)
+    programs = [folder.resolve() for folder in args.programs]
+    missing = [str(f) for f in programs if not f.exists()]
+    if missing:
+        for folder in missing:
+            print(f"  ! no such folder: {folder}", file=sys.stderr)
+        return 1
+    pools = arrange_media(media_root, programs, args.ads.resolve(), args.channel, name)
 
     # A ceiling picks the richest pool at or below it. Asking for `family` on a library
     # with only kids spots quietly gets kids rather than failing.
@@ -338,7 +396,7 @@ def run(args: argparse.Namespace) -> int:
 
     increment = args.increment
     if increment is None:
-        increment, median, count = choose_increment(args.programs.resolve())
+        increment, median, count = choose_increment(programs)
         ad_share = 100 * (1 - median / (increment * 60)) if increment else 0
         print(f"  blocks      {increment} min, derived from {count} programme(s) "
               f"(median {median/60:.1f} min) -> about {ad_share:.0f}% ads")
@@ -426,7 +484,10 @@ def run(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="tub3.bootstrap", description=__doc__)
-    ap.add_argument("--programs", type=Path, required=True, help="folder of shows")
+    # Repeatable. A library is rarely one folder, and pointing at a common parent to get
+    # several of them sweeps in everything else that happens to live there.
+    ap.add_argument("--programs", type=Path, required=True, action="append",
+                    metavar="DIR", help="folder of shows; repeat for several")
     ap.add_argument("--ads", type=Path, required=True, help="folder of cut commercials")
     ap.add_argument("--media-root", type=Path, required=True,
                     help="where the FS42 content tree is assembled (symlinks, not copies)")
