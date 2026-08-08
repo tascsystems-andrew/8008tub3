@@ -20,39 +20,39 @@
           "/mnt/tub3/Media/mshare/Kids TV/Go! Go! Cory Carson",
           "/mnt/tub3/Media/mshare/Kids TV/Chip Chilla",
           "/mnt/tub3/Media/mshare/Kids TV/Trotro",
-          "/mnt/tub3/Media/mshare/Kids TV/Ready, Steady, Wiggle!"
+          "/mnt/tub3/Media/mshare/Kids TV/The Wiggles"
         ],
         "shows-kids": [
           "/mnt/tub3/Media/mshare/Kids TV/Arthur",
           "/mnt/tub3/Media/mshare/Kids TV/Paw Patrol",
           "/mnt/tub3/Media/mshare/Kids TV/If You Give a Mouse a Cookie",
-          "/mnt/tub3/Media/mshare/Kids TV/The Berenstain Bears (2003)",
+          "/mnt/tub3/Media/mshare/Kids TV/The Berenstain Bears",
           "/mnt/tub3/Media/mshare/Kids TV/Madeline",
           "/mnt/tub3/Media/mshare/Kids TV/Babar"
         ],
         "shows-afterschool": [
-          "/mnt/tub3/Media/mshare/Kids TV/Pok\u00e9mon",
-          "/mnt/tub3/Media/mshare/Kids TV/Mr. Bean: The Animated Series",
+          "/mnt/tub3/Media/mshare/Kids TV/Pokemon",
+          "/mnt/tub3/Media/mshare/Kids TV/Mr.Bean The Animated Series",
           "/mnt/tub3/Media/mshare/Kids TV/Mr. Bean",
-          "/mnt/tub3/Media/mshare/Kids TV/Bill Nye: The Science Guy"
+          "/mnt/tub3/Media/mshare/Kids TV/Bill Nye The Science Guy"
         ],
         "shows-dinner": [
           "/mnt/tub3/Media/mshare/TV/Friends",
-          "/mnt/tub3/Media/mshare/TV/Bob's Burgers",
+          "/mnt/tub3/Media/mshare/TV/Bob's Burgers Seasons",
           "/mnt/tub3/Media/mshare/TV/The Simpsons",
           "/mnt/tub3/Media/mshare/TV/King of the Hill",
           "/mnt/tub3/Media/mshare/TV/Futurama"
         ],
         "shows-evening": [
-          "/mnt/tub3/Media/mshare/TV/The Office (US)",
-          "/mnt/tub3/Media/mshare/TV/Schitt's Creek",
+          "/mnt/tub3/Media/mshare/TV/The Office",
+          "/mnt/tub3/Media/mshare/TV/Schitts Creek",
           "/mnt/tub3/Media/mshare/TV/Rick and Morty"
         ],
         "shows-late": [
-          "/mnt/tub3/Media/mshare/TV/It's Always Sunny in Philadelphia",
+          "/mnt/tub3/Media/mshare/TV/Its Always Sunny in Philadelphia",
           "/mnt/tub3/Media/mshare/TV/Portlandia",
-          "/mnt/tub3/Media/mshare/TV/The Whitest Kids U'Know",
-          "/mnt/tub3/Media/mshare/TV/Harvey Birdman, Attorney at Law"
+          "/mnt/tub3/Media/mshare/TV/The Whitest Kids U' Know",
+          "/mnt/tub3/Media/mshare/TV/Harvey Birdman Attorney at Law"
         ]
       },
       "dayparts": [
@@ -92,10 +92,10 @@
           "/mnt/tub3/Media/mshare/Kids TV/Arthur",
           "/mnt/tub3/Media/mshare/Kids TV/Paw Patrol",
           "/mnt/tub3/Media/mshare/Kids TV/If You Give a Mouse a Cookie",
-          "/mnt/tub3/Media/mshare/Kids TV/The Berenstain Bears (2003)",
+          "/mnt/tub3/Media/mshare/Kids TV/The Berenstain Bears",
           "/mnt/tub3/Media/mshare/Kids TV/Madeline",
           "/mnt/tub3/Media/mshare/Kids TV/Babar",
-          "/mnt/tub3/Media/mshare/Kids TV/Mr. Bean: The Animated Series",
+          "/mnt/tub3/Media/mshare/Kids TV/Mr.Bean The Animated Series",
           "/mnt/tub3/Media/mshare/Kids TV/Ben and Holly's Little Kingdom",
           "/mnt/tub3/Media/mshare/Kids TV/Bob the Builder",
           "/mnt/tub3/Media/mshare/Kids TV/Twirlywoos",
@@ -116,7 +116,7 @@
           "/mnt/tub3/Media/mshare/Kids TV/Mister Rogers' Neighborhood",
           "/mnt/tub3/Media/mshare/Kids TV/Daniel Tiger's Neighborhood",
           "/mnt/tub3/Media/mshare/Kids TV/Dragon Tales",
-          "/mnt/tub3/Media/mshare/Kids TV/Bill Nye: The Science Guy"
+          "/mnt/tub3/Media/mshare/Kids TV/Bill Nye The Science Guy"
         ]
       }
     },
@@ -140,6 +140,15 @@
         "films-kids": [
           "/mnt/tub3/Media/mshare/Kids Movies"
         ]
+      },
+      "exclude": {
+        "films-kids": [
+          "song of the south",
+          "princess.mononoke",
+          "ferris.buellers",
+          "pirates.of.the.caribbean",
+          "plex versions"
+        ]
       }
     },
     {
@@ -150,8 +159,8 @@
       "breaks": "end",
       "sources": {
         "shows-life": [
-          "/mnt/tub3/Media/mshare/TV/The Great British Baking Show",
-          "/mnt/tub3/Media/mshare/TV/Top Gear",
+          "/mnt/tub3/Media/mshare/TV/The Great British Bake Off",
+          "/mnt/tub3/Media/mshare/TV/Top Gear UK 1-17",
           "/mnt/tub3/Media/mshare/TV/Selling Sunset",
           "/mnt/tub3/Media/mshare/TV/Selling the OC",
           "/mnt/tub3/Media/mshare/TV/Love is Blind"
@@ -166,15 +175,15 @@
       "breaks": "end",
       "sources": {
         "shows-travel": [
-          "/mnt/tub3/Media/mshare/TV/Anthony Bourdain: No Reservations",
-          "/mnt/tub3/Media/mshare/TV/Anthony Bourdain: Parts Unknown",
+          "/mnt/tub3/Media/mshare/TV/No Reservations",
+          "/mnt/tub3/Media/mshare/TV/Anthony Bourdain - Parts Unknown",
           "/mnt/tub3/Media/mshare/TV/The Layover",
           "/mnt/tub3/Media/mshare/TV/Long Way Round",
           "/mnt/tub3/Media/mshare/TV/Long Way Up",
           "/mnt/tub3/Media/mshare/TV/Long Way Down",
           "/mnt/tub3/Media/mshare/TV/Departures",
-          "/mnt/tub3/Media/mshare/TV/The Grand Tour (2016)",
-          "/mnt/tub3/Media/mshare/TV/Formula 1: Drive to Survive"
+          "/mnt/tub3/Media/mshare/TV/The Grand Tour 2016",
+          "/mnt/tub3/Media/mshare/TV/Formula 1 Drive to Survive"
         ]
       }
     },
@@ -199,6 +208,49 @@
       }
     },
     {
+      "number": 12,
+      "name": "THE ZONE",
+      "rating": "family",
+      "increment": 30,
+      "sources": {
+        "anime-series": [
+          "/mnt/tub3/Media/mshare/Kids TV/Pokemon"
+        ],
+        "anime-films": [
+          "/mnt/tub3/Media/mshare/Kids Movies/My.Neighbor.Totoro.1988.DUAL-AUDIO.JAP-ENG.1080p.10bit.BluRay.2CH.x265.HEVC-PSA.mkv",
+          "/mnt/tub3/Media/mshare/Kids Movies/[AnimeRG] Kiki's Delivery Service (1989) [720p BD 10bit] [Dual Audio] [JRR].mkv",
+          "/mnt/tub3/Media/mshare/Kids Movies/Spirited Away (2001) [720p][MeGaTroN].mkv",
+          "/mnt/tub3/Media/mshare/Kids Movies/Ponyo.A.K.A.Gake.no.ue.no.Ponyo.2008.DUAL-AUDIO.JAP-ENG.1080p.10bit.BluRay.6CH.x265.HEVC-PSA",
+          "/mnt/tub3/Media/mshare/Kids Movies/Howls.Moving.Castle.2004.BRRip.1080p.x265.[Dual.Audio]-DZY",
+          "/mnt/tub3/Media/mshare/Kids Movies/Castle.in.the.Sky.1986.[1080p.x265.HEVC.10bit.BluRay.Dual.Audio].v1",
+          "/mnt/tub3/Media/mshare/Kids Movies/Whisper.of.the.Heart.1995.1080p.BDRip.Dual.Audio.AAC5.1.10bits.x265-Rapta"
+        ],
+        "anime-late": [
+          "/mnt/tub3/Media/mshare/Kids Movies/Princess.Mononoke.1997.1080p.BDRip.Dual.Audio.AAC5.1.10bits.x265-Rapta",
+          "/mnt/tub3/Media/mshare/Kids Movies/Howls.Moving.Castle.2004.BRRip.1080p.x265.[Dual.Audio]-DZY",
+          "/mnt/tub3/Media/mshare/Kids Movies/Castle.in.the.Sky.1986.[1080p.x265.HEVC.10bit.BluRay.Dual.Audio].v1",
+          "/mnt/tub3/Media/mshare/Kids Movies/Whisper.of.the.Heart.1995.1080p.BDRip.Dual.Audio.AAC5.1.10bits.x265-Rapta",
+          "/mnt/tub3/Media/mshare/Kids Movies/Spirited Away (2001) [720p][MeGaTroN].mkv"
+        ]
+      },
+      "dayparts": [
+        {
+          "hours": "6-17",
+          "tag": "anime-series"
+        },
+        {
+          "hours": "17-23",
+          "tag": "anime-films",
+          "increment": 120
+        },
+        {
+          "hours": "23-6",
+          "tag": "anime-late",
+          "increment": 120
+        }
+      ]
+    },
+    {
       "number": 11,
       "name": "LAST LAUGH",
       "rating": "late",
@@ -209,9 +261,9 @@
           "/mnt/tub3/Media/mshare/TV/Monty Python's Flying Circus",
           "/mnt/tub3/Media/mshare/TV/Little Britain",
           "/mnt/tub3/Media/mshare/TV/Come Fly With Me",
-          "/mnt/tub3/Media/mshare/TV/Eastbound & Down",
+          "/mnt/tub3/Media/mshare/TV/Eastbound and Down",
           "/mnt/tub3/Media/mshare/TV/Californication",
-          "/mnt/tub3/Media/mshare/TV/The Paper (2025)"
+          "/mnt/tub3/Media/mshare/TV/The Paper"
         ]
       }
     }
