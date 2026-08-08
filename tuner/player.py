@@ -292,7 +292,19 @@ class MpvPlayer:
     def _command(self, command: list, *, wait: bool = True, timeout: float = 2.0):
         self._request_id += 1
         request_id = self._request_id
-        self._send({"command": command, "request_id": request_id})
+        try:
+            self._send({"command": command, "request_id": request_id})
+        except (OSError, TimeoutError) as exc:
+            # A write that cannot complete must not reach the run loop. mpv's IPC socket has
+            # a finite buffer, and a caller that pushes faster than mpv drains — the listings
+            # overlay was sending five kilobytes four times a second — fills it, blocks the
+            # write, and times out. That exception propagated out of the tick and killed the
+            # tuner, so tuning to the guide took the television down and systemd restarted it.
+            #
+            # A dropped command is a missing overlay for a moment. A raised one is a black
+            # screen, so this is never the right thing to be strict about.
+            print(f"  mpv command dropped ({command[0] if command else '?'}): {exc}")
+            return None
         if not wait:
             return None
         deadline = time.monotonic() + timeout
