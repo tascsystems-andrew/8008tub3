@@ -310,7 +310,12 @@ def main(argv: list[str] | None = None) -> int:
         wants_fullscreen = True
     if args.windowed:
         wants_fullscreen = False
-    player = MpvPlayer(fullscreen=wants_fullscreen, video_output=args.vo)
+    # Optional, and unset on anything that is not a bare-KMS appliance — a Mac has no DRM
+    # connector to address. `mpv --drm-mode=help` lists what the attached television offers.
+    drm_mode = load_settings().get("display_mode") or None
+    if drm_mode:
+        print(f"  display: {drm_mode}")
+    player = MpvPlayer(fullscreen=wants_fullscreen, video_output=args.vo, drm_mode=drm_mode)
     try:
         player.start()
     except MpvUnavailable as exc:
