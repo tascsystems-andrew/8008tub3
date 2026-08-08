@@ -374,6 +374,17 @@ class MpvPlayer:
             return
         self._command(["osd-overlay", overlay_id, "none", ""], wait=False)
 
+    def set_subtitles(self, on: bool) -> None:
+        """Show or hide subtitles, now and for everything tuned afterwards.
+
+        Two properties, because one is not enough. `sub-visibility` governs the current
+        file; `sid` governs which track gets selected when the *next* file loads, and mpv
+        resets visibility per file. Setting only the first turns subtitles on for the
+        programme you are watching and off again at the next advert.
+        """
+        self._command(["set_property", "sub-visibility", "yes" if on else "no"], wait=False)
+        self._command(["set_property", "sid", "auto" if on else "no"], wait=False)
+
     def nudge_volume(self, delta: int) -> None:
         if not self.alive:
             return

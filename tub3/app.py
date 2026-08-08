@@ -121,8 +121,13 @@ def menu_state(db: Path, web_port: int) -> dict:
         try:
             count = conn.execute("SELECT COUNT(*) FROM liquid_blocks").fetchone()[0]
             state["library"] = f"{count:,} blocks scheduled"
+        except sqlite3.DatabaseError:
+            state["library"] = "building…"
         finally:
             conn.close()
+
+    from .web import load_settings  # noqa: PLC0415
+    state["subtitles"] = "On" if load_settings().get("subtitles") else "Off"
     return state
 
 
@@ -345,8 +350,23 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  input: {', '.join(d.name for d in drivers)}")
     print("\n  UP/DOWN change channel · ENTER opens the menu · ESC closes it · Q quits\n")
 
-    box = Box(lineup, player, start_channel=args.channel or channels[0][0],
-              state=menu_state(args.db, args.web_port))
+    state = menu_state(args.db, args.web_port)
+
+    def set_subtitles(value: str) -> None:
+        """Apply it now and remember it. A setting that forgets itself is not a setting."""
+        on = value == "On"
+        player.set_subtitles(on)
+        from .web import load_settings, save_settings, SETTINGS  # noqa: PLC0415
+        import json as _json
+        current = load_settings()
+        current["subtitles"] = on
+        SETTINGS.write_text(_json.dumps(current, indent=2))
+
+    state["_set_subtitles"] = set_subtitles
+    # Apply the saved value at startup, or the menu would say On over a picture with none.
+    player.set_subtitles(state.get("subtitles") == "On")
+
+    box = Box(lineup, player, start_channel=args.channel or channels[0][0], state=state)
     try:
         box.run(drivers)
     except KeyboardInterrupt:

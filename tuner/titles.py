@@ -62,6 +62,10 @@ def parse_episode(name: str) -> tuple[int | None, int | None]:
 
 def clean(text: str) -> str:
     """Strip a release name down to words a person would recognise."""
+    # Audio and codec tags carry their own version numbers — AAC2.0, DDP5.1, DTS-HD — so a
+    # plain word list never matches them. Strip the family plus whatever digits follow.
+    text = re.sub(r"\b(AAC|DDP|DD|DTS|EAC3|AC3|TrueHD|Atmos|FLAC|MP3|Opus)[\d.\-]*\b",
+                  " ", text, flags=re.I)
     for noise in NOISE:
         text = re.sub(rf"\b{re.escape(noise)}\b", " ", text, flags=re.I)
     text = text.replace(".", " ").replace("_", " ").replace("-", " ")
@@ -107,13 +111,33 @@ def describe(path: str | Path) -> tuple[str, str]:
                 break
         show = show or clean(stem)
 
-    if season is not None:
-        marker = f"S{season:02d}E{number:02d}"
-        subtitle = f"{marker}  {detail}" if detail else marker
-    else:
-        subtitle = detail
+    # No SxxExx. Nobody watching television needs the episode number, and a broadcast bug
+    # never carried one — it is a filing detail that leaked out of the filename.
+    #
+    # The episode title is only shown when it looks like a title. Rippers put all sorts
+    # after the marker — quality tags, group names, dates, the same words again — and a
+    # confident-looking line of noise is worse than a blank one, because the viewer reads
+    # it as the name of what they are watching.
+    return show[:44] or "—", detail[:52] if _plausible(detail) else ""
 
-    return show[:44] or "—", subtitle[:52]
+
+def _plausible(text: str) -> bool:
+    """Is this an episode title, or is it debris left over from a release name?"""
+    if len(text) < 3 or len(text) > 60:
+        return False
+    words = text.split()
+    if not words:
+        return False
+    # Mostly digits, or a lone token in block capitals: a group tag or a date, not a title.
+    letters = sum(character.isalpha() for character in text)
+    if letters < len(text.replace(" ", "")) * 0.6:
+        return False
+    if len(words) == 1 and text.isupper():
+        return False
+    # A real title has at least one proper word in it. "AAC2 0" and "x264 SRS" do not.
+    if not any(len(word) >= 4 and word.isalpha() for word in words):
+        return False
+    return True
 
 
 def build(pool_root: Path, plex_client=None) -> dict:
