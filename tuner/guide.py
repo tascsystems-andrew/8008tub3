@@ -260,10 +260,19 @@ class Guide:
         # Drawn first so the header covers anything scrolling up behind it.
         visible_h = height - HEADER_H
         total_h = max(1, len(rows) * ROW_H)
-        # Continuous wrap: the list is drawn twice, so it never shows a seam or a gap.
-        offset = ((now - self._started) * SCROLL_PX_PER_SEC) % total_h
 
-        for repeat in (0, 1):
+        # Only scroll when the dial does not fit. Eleven channels at 96px sit inside 870px of
+        # screen with room to spare, so scrolling a list that is entirely visible is motion
+        # for its own sake — and it is expensive motion: a moving guide has to be redrawn
+        # continuously, and each redraw is five kilobytes of ASS down mpv's IPC socket. At
+        # four a second that filled the socket buffer, blocked the write, and took the whole
+        # tuner down with a timeout. A static guide is pushed once and then left alone.
+        self.scrolling = total_h > visible_h
+        offset = (((now - self._started) * SCROLL_PX_PER_SEC) % total_h
+                  if self.scrolling else 0.0)
+
+        # Drawn twice when scrolling, so the wrap never shows a seam; once when it does not.
+        for repeat in ((0, 1) if self.scrolling else (0,)):
             for index, row in enumerate(rows):
                 y = HEADER_H + index * ROW_H - offset + repeat * total_h
                 if y < HEADER_H - ROW_H or y > height:
