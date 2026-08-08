@@ -356,7 +356,22 @@ def main(argv: list[str] | None = None) -> int:
         print(f"    {GUIDE_CHANNEL:>3}  GUIDE  ({len(tracks)} track(s))"
               + ("" if tracks else "  — silent; set guide_music_dir in settings"))
 
-    lineup = Lineup(([guide] if guide else []) + stations)
+    # The ambiance channel, if there is anything to loop. Left off the dial entirely when the
+    # folder is empty: a channel that plays nothing reads as a fault, and an unexplained
+    # off-air card is worse than a channel that simply is not there yet.
+    ambiance = None
+    if stations:
+        from .lineup import AMBIANCE_CHANNEL  # noqa: PLC0415
+        from tuner.ambiance import clips_for  # noqa: PLC0415
+        from tuner.schedule import AmbianceChannel  # noqa: PLC0415
+        folder = load_settings().get("ambiance_dir")
+        clips = clips_for(Path(folder)) if folder else []
+        if clips:
+            ambiance = AmbianceChannel(AMBIANCE_CHANNEL, "AMBIANCE", Path(folder))
+            print(f"    {AMBIANCE_CHANNEL:>3}  AMBIANCE  ({len(clips)} clip(s) this month)")
+
+    lineup = Lineup(([guide] if guide else []) + stations
+                    + ([ambiance] if ambiance else []))
 
     drivers = build_drivers(player, headless=args.headless)
     print(f"  input: {', '.join(d.name for d in drivers)}")
