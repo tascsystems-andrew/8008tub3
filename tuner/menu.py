@@ -46,6 +46,10 @@ class Item:
     kind: ItemKind = ItemKind.ACTION
     value: str | None = None
     choices: list[str] = field(default_factory=list)
+    # Called with the new value when a CHOICE cycles. Without this a choice changes the text
+    # on screen and nothing else, which is worse than not offering it — the viewer believes
+    # they turned something on.
+    on_change: object = None
     children: list["Item"] = field(default_factory=list)
     action: Callable[[], str | None] | None = None
     help: str = ""
@@ -58,6 +62,11 @@ class Item:
         if self.kind is ItemKind.CHOICE and self.choices:
             index = self.choices.index(self.value) if self.value in self.choices else -1
             self.value = self.choices[(index + 1) % len(self.choices)]
+            if callable(self.on_change):
+                try:
+                    self.on_change(self.value)
+                except Exception:  # noqa: BLE001 - a failed setting must not kill the menu
+                    pass
 
 
 @dataclass
@@ -312,6 +321,9 @@ def build_root(state: dict) -> Screen:
     the browser UI; anything the user shouldn't touch mid-show isn't here at all.
     """
     picture = [
+        Item("Subtitles", ItemKind.CHOICE, state.get("subtitles", "Off"), ["Off", "On"],
+             help="Show subtitles when a programme carries them. Most do not.",
+             on_change=state.get("_set_subtitles")),
         Item("Aspect", ItemKind.CHOICE, state.get("aspect", "Pillarbox 4:3"),
              ["Pillarbox 4:3", "Stretch to fill", "Zoom to fill"],
              help="How 4:3 content fills a 16:9 screen"),
