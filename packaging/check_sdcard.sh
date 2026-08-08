@@ -66,8 +66,31 @@ if [[ -z "$SETTINGS" ]]; then
 fi
 
 # --- SSH, and the right key -------------------------------------------------------
-if grep -q "$WANT_KEY_BODY" <<<"$SETTINGS"; then
+# Match the whole `ssh-ed25519 <body>` form, not just the body. sshd parses each
+# authorized_keys line as "<type> <base64> [comment]" and silently skips anything that does
+# not start with an algorithm name — so a paste of the base64 alone looks completely correct
+# to a human, and fails at the only moment it matters, over a network needing that key.
+if grep -q "ssh-ed25519[[:space:]]\+$WANT_KEY_BODY" <<<"$SETTINGS"; then
     pass "SSH authorised key is the BoobTube key"
+elif grep -q "$WANT_KEY_BODY" <<<"$SETTINGS"; then
+    fail "The BoobTube key is on the card, but WITHOUT its 'ssh-ed25519 ' prefix"
+    note "sshd skips a line that does not begin with an algorithm name, so this card"
+    note "would boot and refuse your key."
+    if [[ $FIX -eq 1 && -f "$BOOT/custom.toml" ]]; then
+        # Prepend the algorithm name to the bare body wherever it appears. Anchored on the
+        # body itself so an already-correct key elsewhere in the file is left alone.
+        sed -i '' "s|\"$WANT_KEY_BODY|\"ssh-ed25519 $WANT_KEY_BODY|g" "$BOOT/custom.toml"
+        if grep -q "ssh-ed25519[[:space:]]\+$WANT_KEY_BODY" "$BOOT/custom.toml"; then
+            note "→ repaired in custom.toml; no re-flash needed"
+            PROBLEMS=$((PROBLEMS - 1))
+        else
+            note "→ could not repair automatically; edit $BOOT/custom.toml by hand"
+        fi
+    else
+        note "Re-run with --fix to repair it in place, or edit $BOOT/custom.toml so the"
+        note "authorized_keys entry reads:"
+        note "  \"ssh-ed25519 $WANT_KEY_BODY andrew@MacBook-Pro-2-boobtube\""
+    fi
 elif grep -qE 'ssh-(ed25519|rsa)|ssh_import_id' <<<"$SETTINGS"; then
     fail "SSH key present, but it is NOT ~/.ssh/boobtube.pub"
     note "Imager pre-filled a different key from this Mac. You would still get in if that"
