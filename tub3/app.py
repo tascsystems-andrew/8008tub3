@@ -40,6 +40,16 @@ def discover_channels(db: Path) -> list[tuple[int, str]]:
         stations = [row[0] for row in conn.execute(
             "SELECT DISTINCT station FROM liquid_blocks"
         )]
+    except sqlite3.DatabaseError:
+        # The file exists but the schedule table does not — which is the *normal* state
+        # for several minutes during a build, because the catalog tables are written well
+        # before liquid_blocks. Checking only for the file meant the tuner crashed on an
+        # OperationalError every two seconds while the standby card polled for a schedule,
+        # i.e. exactly while the screen said "Building your channel".
+        #
+        # Also covers a half-written or corrupt database: no channels is the correct
+        # answer to "what can I tune to" in every one of those cases.
+        return []
     finally:
         conn.close()
 

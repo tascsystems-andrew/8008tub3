@@ -63,7 +63,7 @@ say "Sending source"
 COPYFILE_DISABLE=1 tar --no-xattrs \
     --exclude='./vendor' --exclude='./.venv' --exclude='./.venv-build' \
     --exclude='./__pycache__' --exclude='*.pyc' --exclude='./runtime' \
-    --exclude='./settings.json' --exclude='./media' \
+    --exclude='./settings.json' --exclude='./plex.json' --exclude='./media' \
     -cf - . | ssh "$HOST" "mkdir -p ~/$DEST && tar -xf - -C ~/$DEST"
 
 SENT="$(ssh "$HOST" "find ~/$DEST -type f ! -path '*/.git/*' | wc -l" | tr -d ' ')"

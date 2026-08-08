@@ -234,6 +234,9 @@ def channel_status() -> list[dict]:
         return []
     conn = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
     try:
+        # The catalog tables are written minutes before liquid_blocks, so "file exists but
+        # schedule table does not" is the normal state throughout a build — which is
+        # exactly when someone is refreshing this page to see whether it worked.
         stations = [r[0] for r in conn.execute("SELECT DISTINCT station FROM liquid_blocks")]
         out = []
         now = time.time()
@@ -264,6 +267,8 @@ def channel_status() -> list[dict]:
                         break
             out.append(entry)
         return out
+    except sqlite3.DatabaseError:
+        return []
     finally:
         conn.close()
 
@@ -412,6 +417,27 @@ PAGE = """<!doctype html>
    <button id=nasmount>Connect</button>
   </div>
   <div class=hint id=nasmsg></div>
+ </div>
+
+ <div class=card>
+  <h2>Plex</h2>
+  <div class=hint id=plexstate>Not connected.</div>
+  <div class=grid2>
+   <div><label>Plex address</label>
+    <input type=text id=plexurl placeholder="http://10.0.1.12:32400"></div>
+   <div><label>Plex token <span class=tag>usually not needed</span></label>
+    <input type=password id=plextoken autocomplete=off placeholder="leave empty"></div>
+  </div>
+  <div class=hint>Plex already matched your library against the standard databases, so it
+   knows each show's real rating. That is what decides whether something can reach a
+   children's channel &mdash; a folder name is a guess, TV-Y is a fact.
+   <br><br>Whether a token is needed depends on your Plex server's Network settings, so
+   try the address on its own first &mdash; if it works, nothing else to do. If Plex asks
+   for one it will say so, and then: open any item in
+   Plex &rarr; the <b>&hellip;</b> menu &rarr; <i>Get Info</i> &rarr; <i>View XML</i>, and
+   copy <code>X-Plex-Token</code> out of the address bar.</div>
+  <div style="margin-top:16px"><button id=plexsave>Connect Plex</button></div>
+  <div class=hint id=plexmsg></div>
  </div>
 
  <div class=card>
@@ -588,6 +614,20 @@ function choose(path){
   if(PICKMODE==='programs'){ $('#pickmsg').textContent=`Added ${path}`; }
   else { $('#picker').hidden=true; }
 }
+$('#plexsave').onclick=async()=>{
+  $('#plexmsg').textContent='Asking Plex…';
+  const r=await (await fetch('/api/plex',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({url:$('#plexurl').value.trim(),token:$('#plextoken').value})})).json();
+  if(!r.ok){ $('#plexmsg').innerHTML=`<span class=warn>${r.error}</span>`; return; }
+  $('#plextoken').value='';          // it has done its job
+  const parts=Object.entries(r.by_rating||{}).map(([k,v])=>`${v} ${k}`).join(' · ');
+  $('#plexmsg').innerHTML=`<span class=ok>Connected.</span> ${r.items} items across
+    ${(r.sections||[]).join(', ')} — ${parts}.` +
+    (r.unrated?` <span class=warn>${r.unrated} have no rating in Plex and count as
+     adult.</span>`:'');
+  $('#plexstate').innerHTML='<span class=ok>Connected</span> — ratings come from Plex.';
+};
 $('#addshows').onclick=()=>openPicker('programs');
 $('#setcomm').onclick=()=>openPicker('commercials');
 $('#pickclose').onclick=()=>$('#picker').hidden=true;
@@ -694,6 +734,40 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/settings":
             self._json({"settings": save_settings(payload)})
+            return
+
+        if path == "/api/plex":
+            from .plex import Plex, PlexError, classify_rating, load_config, save_config
+
+            url = str(payload.get("url") or "").strip()
+            token = str(payload.get("token") or "").strip()
+            if not token:
+                token = load_config().get("token", "")     # keep the stored one
+            if not url:
+                self._json({"ok": False, "error": "The server address is needed."})
+                return
+            # No token demanded: many servers, including one on your own LAN, answer
+            # local clients without one. Try as-is and only complain if Plex objects.
+            try:
+                client = Plex(url, token)
+                items = client.library()
+            except PlexError as exc:
+                self._json({"ok": False, "error": str(exc)})
+                return
+            except Exception as exc:  # noqa: BLE001
+                self._json({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+                return
+
+            save_config(url, token)
+            by_rating: dict[str, int] = {}
+            unrated = 0
+            for item in items:
+                by_rating[item.rating] = by_rating.get(item.rating, 0) + 1
+                if not item.content_rating:
+                    unrated += 1
+            self._json({"ok": True, "items": len(items), "by_rating": by_rating,
+                        "unrated": unrated,
+                        "sections": sorted({i.section for i in items if i.section})})
             return
 
         if path.startswith("/api/storage/"):
