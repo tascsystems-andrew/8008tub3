@@ -78,6 +78,10 @@ class Row:
 FESTIVE_FROM = (11, 15)
 FESTIVE_TO = (1, 1)
 
+# Where the festive bed lives. One list, used both to find it in season and to keep it out of
+# the ordinary playlist out of season — two places would drift, and the drift is silent.
+FESTIVE_FOLDERS = ("Christmas", "christmas", "Xmas", "Holiday")
+
 
 def is_festive(when: float | None = None) -> bool:
     stamp = datetime.fromtimestamp(time.time() if when is None else when)
@@ -103,24 +107,29 @@ def music_for(folder: Path | None, when: float | None = None) -> list[Path]:
         return []
 
     if is_festive(when):
-        for name in ("Christmas", "christmas", "Xmas", "Holiday"):
+        for name in FESTIVE_FOLDERS:
             festive = root / name
             if festive.is_dir():
                 tracks = _audio_in(festive)
                 if tracks:
                     return tracks
 
-    # Not `rglob` at the top level, or the Christmas folder would be swept into the ordinary
-    # playlist and play carols in July.
-    return _audio_in(root, recurse=False)
+    # Recurse, but never into the festive folder — otherwise it is swept into the ordinary
+    # playlist and carols turn up in July. Refusing to recurse at all would have been the
+    # cheaper fix and the wrong one: it silently ignores music filed in any subfolder, which
+    # is how anyone with more than a couple of tracks would organise them.
+    return _audio_in(root, skip=FESTIVE_FOLDERS)
 
 
-def _audio_in(folder: Path, *, recurse: bool = True) -> list[Path]:
+def _audio_in(folder: Path, *, skip: tuple[str, ...] = ()) -> list[Path]:
+    lowered = {name.lower() for name in skip}
     try:
-        found = folder.rglob("*") if recurse else folder.iterdir()
-        return sorted(p for p in found
-                      if p.is_file() and p.suffix.lower() in AUDIO_SUFFIXES
-                      and not p.name.startswith("."))
+        return sorted(
+            p for p in folder.rglob("*")
+            if p.is_file() and p.suffix.lower() in AUDIO_SUFFIXES
+            and not p.name.startswith(".")
+            and not lowered & {part.lower() for part in p.relative_to(folder).parts[:-1]}
+        )
     except OSError:
         return []
 
