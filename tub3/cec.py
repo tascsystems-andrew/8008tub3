@@ -142,12 +142,15 @@ def tv_on() -> bool:
 
     Only ever called from a physical keypress. See the module docstring — an appliance that
     can turn a television on by itself will eventually do it at 3am.
+
+    Delegates to tub3.cectest, which uses whichever sequence was found to work on this
+    television and sends Active Source with our *real* physical address. This function
+    previously hardcoded phys-addr=0.0.0.0, which is the TV's own address — announcing the
+    TV as the active source tells it nothing, and is one good reason a wake can appear to
+    do nothing at all.
     """
-    if not Path(CEC_DEVICE).exists() or not shutil.which("cec-ctl"):
-        return False
-    code, _ = _run(["cec-ctl", "-d", CEC_DEVICE, "--to", "0", "--image-view-on"])
-    _run(["cec-ctl", "-d", CEC_DEVICE, "--active-source", "phys-addr=0.0.0.0"])
-    return code == 0
+    from .cectest import wake
+    return wake()
 
 
 def tv_off() -> bool:
