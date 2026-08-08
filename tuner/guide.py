@@ -145,8 +145,9 @@ def window(now: float) -> tuple[float, float]:
 def rows_from_lineup(lineup, now: float, guide_channel: int) -> list[Row]:
     """Read what is actually scheduled. Live, never cached.
 
-    The guide's own channel is included and labelled, because a viewer parked on it should
-    see where they are. It has no programmes, which is correct — it is always this.
+    The guide's own channel is left out. It is the one row that can never say anything — it
+    has no programmes, because it *is* the listings — so it reads as an empty row on a grid
+    whose whole job is telling you what is on. Anyone reading it is already looking at it.
     """
     begin, finish = window(now)
     rows: list[Row] = []
@@ -160,7 +161,6 @@ def rows_from_lineup(lineup, now: float, guide_channel: int) -> list[Row]:
         row = Row(number=number, name=name)
 
         if number == guide_channel:
-            rows.append(row)
             continue
 
         # Walk the window in steps, asking the channel what is on. Cheaper and far simpler
