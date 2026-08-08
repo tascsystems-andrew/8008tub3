@@ -126,6 +126,7 @@ def schedule_all(
     *,
     cooldown: int = 45,
     only: set[int] | None = None,
+    smallest_first: bool = True,
     quiet: bool = False,
 ) -> tuple[int, list[str]]:
     """Catalog and schedule each station. Returns (stations done, problems)."""
@@ -136,6 +137,19 @@ def schedule_all(
     wanted = [c for c in confs if only is None or c["channel_number"] in only]
     if not wanted:
         return 0, []
+
+    if smallest_first:
+        # Cheapest station first, so channels appear steadily rather than all at the end.
+        # Counting links is a local directory walk over symlinks — no NAS traffic — and it is
+        # a good enough proxy for how long the scan behind it will take.
+        def weight(conf: dict) -> int:
+            root = Path(conf["content_dir"])
+            try:
+                return sum(1 for _ in root.rglob("*"))
+            except OSError:
+                return 1 << 30
+        wanted.sort(key=weight)
+        _say("  order: " + " → ".join(f"{c['channel_number']}" for c in wanted))
 
     # Upstream resolves the schedule DB, confs/ and its config schema against the process
     # working directory, and importing the package is separate from being able to find them.
@@ -212,7 +226,11 @@ def schedule_all(
     # After the stations, because it walks the same pools they were just built from and a
     # name on screen matters less than a channel existing to put it on.
     if done:
-        count, note = build_titles(Path(wanted[0]["content_dir"]))
+        # `content_dir` is now a per-station subtree (`.../media/st12`), so the pools all
+        # channels share live one level up. Titles are mapped for the whole dial at once —
+        # the map is keyed by resolved file path and the tuner reads one file, so building it
+        # per station would rewrite the same JSON ten times with progressively more in it.
+        count, note = build_titles(Path(wanted[0]["content_dir"]).parent)
         if not quiet:
             _say(f"\n  titles  {note}")
         if not count:
@@ -237,7 +255,7 @@ def main(argv: list[str] | None = None) -> int:
         if not confs:
             print("\n  no station configs — run tub3.lineup first\n", file=sys.stderr)
             return 1
-        count, note = build_titles(Path(confs[0]["content_dir"]))
+        count, note = build_titles(Path(confs[0]["content_dir"]).parent)
         print(f"\n  {note}\n")
         return 0 if count else 1
 

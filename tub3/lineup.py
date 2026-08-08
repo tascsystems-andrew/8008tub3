@@ -143,6 +143,29 @@ class Channel:
         return f"tub3_ch{self.number}"
 
     @property
+    def content_dir(self) -> str:
+        """This channel's own view of the media root.
+
+        Upstream scans the whole of `content_dir` before it will schedule anything, and every
+        station used to be handed the same one — so building any channel meant cataloguing
+        every file on the dial first. On a quiet NAS that is one shared scan and a virtue.
+        Under load it is all-or-nothing: with Plex running intro detection the rate fell from
+        73 files a minute to 2.4, which turns "an hour" into "a day and a half" and nothing at
+        all goes on air until the end of it.
+
+        A per-station directory of symlinks to just that station's tags makes the scan
+        proportional to the channel. THE ZONE is 219 files; it does not have to wait behind
+        BOOBTUBE's 4,160. Channels arrive smallest-first instead of all at once, which is also
+        simply better behaviour on a box someone is watching.
+
+        Nothing is scanned twice for it: `rich_find_media` keys entries on `os.path.realpath`,
+        so a file shared by two channels resolves to one cache row, and `iterate_file_entries`
+        skips anything already there. The cost of splitting is one directory walk per station,
+        not one probe per station.
+        """
+        return f"st{self.number}"
+
+    @property
     def bump_tag(self) -> str:
         """This channel's own bump pool.
 
@@ -421,6 +444,39 @@ def _has_video(folder: Path) -> bool:
     return next(_iter_videos(folder, sort=False), None) is not None
 
 
+def build_station_dir(media_root: Path, channel: Channel, commercial_tag: str | None) -> Path:
+    """A directory holding only the pools this channel draws from.
+
+    Symlinked directories, not copies or a second set of pools — `os.walk(followlinks=True)`
+    in `media_processor._rfind_media` follows them, so upstream sees an ordinary tree
+    containing exactly this station's tags and nothing else.
+
+    Stale links are cleared first. A channel that loses a daypart would otherwise keep
+    scanning and scheduling the tag it no longer has, which is the same class of bug as a
+    config left behind for a deleted channel.
+    """
+    station = media_root / channel.content_dir
+    if station.exists():
+        for stale in station.iterdir():
+            if stale.is_symlink():
+                stale.unlink()
+    station.mkdir(parents=True, exist_ok=True)
+
+    wanted = set(channel.sources) | {channel.bump_tag}
+    if commercial_tag:
+        wanted.add(commercial_tag)
+
+    for tag in sorted(wanted):
+        target = media_root / tag
+        if not target.exists():
+            continue
+        link = station / tag
+        if not link.exists():
+            # Relative, so the tree survives the media root being moved or mounted elsewhere.
+            link.symlink_to(Path("..") / tag, target_is_directory=True)
+    return station
+
+
 def build_bumps(media_root: Path, channel: Channel, bumpers: Path | None) -> int:
     """Fill this channel's bump pool, on the right side of the break.
 
@@ -572,7 +628,8 @@ def compile_station(channel: Channel, media_root: Path, *, pools: dict[str, str]
         "network_name": channel.name,
         "channel_number": channel.number,
         "network_type": "standard",
-        "content_dir": str(media_root.resolve()),
+        # This station's own subtree, not the whole media root: see `Channel.content_dir`.
+        "content_dir": str((media_root / channel.content_dir).resolve()),
         "bump_dir": channel.bump_tag,
         "commercial_free": commercial_tag is None,
         # Chapter-derived break points are discarded by anything other than "standard", so a
@@ -674,6 +731,10 @@ def apply(lineup_path: Path, media_root: Path, ads_root: Path,
             continue
         build_bumps(media_root, channel, bumpers)
         conf = compile_station(channel, media_root, pools=pools)
+        # After the config, because which ad pool the channel resolved to is decided there
+        # and the station tree has to contain it.
+        build_station_dir(media_root, channel,
+                          conf["station_conf"].get("commercial_dir"))
         (conf_dir / f"{channel.station}.json").write_text(json.dumps(conf, indent=4))
         episodes = sum(built.get(tag, 0) for tag in channel.sources)
         out.append((channel, episodes))
