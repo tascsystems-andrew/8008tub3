@@ -83,6 +83,44 @@ def _say(*parts) -> None:
     print(*parts, flush=True)
 
 
+def build_titles(media_root: Path) -> tuple[int, str]:
+    """Write the programme-name map the tuner reads at tune time.
+
+    `tuner.titles.build` has existed since the bug was written and nothing ever called it, so
+    `titles.json` on the box was two bytes — `{}` — and every name on screen came from the
+    filename parser that the map exists to make unnecessary. It was not returning nothing; it
+    was never asked.
+
+    Belongs here because it is a build-side job with the same shape as everything else in this
+    module: it needs Plex and a directory walk, both of which the tuner deliberately refuses,
+    and the answer must be sitting on local disk before a channel change asks for it. Failures
+    are reported and never raised — a missing episode title costs one line on the bug, and
+    must not be able to fail a schedule.
+    """
+    from tuner.titles import TITLES, build
+    from .plex import from_config
+
+    try:
+        client = from_config()
+    except Exception as exc:  # noqa: BLE001
+        return 0, f"Plex config unreadable: {exc}"
+    if client is None:
+        return 0, "Plex is not configured — names will come from filenames"
+
+    try:
+        mapping = build(media_root, client)
+    except Exception as exc:  # noqa: BLE001
+        return 0, f"title map failed: {exc}"
+
+    try:
+        TITLES.write_text(json.dumps(mapping, indent=1))
+    except OSError as exc:
+        return 0, f"could not write {TITLES}: {exc}"
+
+    episodes = sum(1 for entry in mapping.values() if entry.get("episode"))
+    return len(mapping), f"{len(mapping)} titles ({episodes} with episode names)"
+
+
 def schedule_all(
     days: int = 2,
     *,
@@ -171,6 +209,15 @@ def schedule_all(
                  f"{relaxed} relaxed, {used.starved} unconstrained")
         done += 1
 
+    # After the stations, because it walks the same pools they were just built from and a
+    # name on screen matters less than a channel existing to put it on.
+    if done:
+        count, note = build_titles(Path(wanted[0]["content_dir"]))
+        if not quiet:
+            _say(f"\n  titles  {note}")
+        if not count:
+            problems.append(f"title map not built — {note}")
+
     return done, problems
 
 
@@ -181,7 +228,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--channel", type=int, action="append",
                     help="only this channel; repeatable. Default is every station.")
     ap.add_argument("--list", action="store_true", help="show the stations and change nothing")
+    ap.add_argument("--titles-only", action="store_true",
+                    help="rebuild the programme-name map without touching any schedule")
     args = ap.parse_args(argv)
+
+    if args.titles_only:
+        confs = station_confs()
+        if not confs:
+            print("\n  no station configs — run tub3.lineup first\n", file=sys.stderr)
+            return 1
+        count, note = build_titles(Path(confs[0]["content_dir"]))
+        print(f"\n  {note}\n")
+        return 0 if count else 1
 
     if args.list:
         print()
