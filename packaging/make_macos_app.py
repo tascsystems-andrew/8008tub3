@@ -45,13 +45,18 @@ PIN = (255, 200, 60)
 ICON_BG = (14, 12, 20, 255)
 
 
-def draw_icon(px: int):
-    """One icon at a given pixel size. Supersampled — thick arcs still alias at the ends."""
+def draw_icon(px: int, bg: tuple = ICON_BG):
+    """One icon at a given pixel size. Supersampled — thick arcs still alias at the ends.
+
+    `bg` exists for the boot splash, which composites the mark onto Plymouth's own
+    background and so needs it drawn on transparency. Pasting the filled version there
+    produces a hard-edged near-black tile floating on black.
+    """
     from PIL import Image, ImageDraw
 
     ss = 4
     size = px * ss
-    image = Image.new("RGBA", (size, size), ICON_BG)
+    image = Image.new("RGBA", (size, size), bg)
     draw = ImageDraw.Draw(image)
 
     # Sits low and slightly left, which is what tips the symbol over into the other reading.
