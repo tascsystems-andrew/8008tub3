@@ -1,0 +1,23 @@
+[Script Info]
+ScriptType: v4.00+
+PlayResX: 1920
+PlayResY: 1080
+WrapStyle: 2
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
+Style: Default,Monospace,40,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1
+
+[Events]
+Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
+Dialogue: 0,0:00:00.00,9:59:59.00,Default,,0,0,0,,{\an7\pos(0,0)\bord0\shad0\1c&H101010&\1a&H00&\p1}m 0 0 l 1920 0 l 1920 1080 l 0 1080{\p0}
+Dialogue: 0,0:00:00.00,9:59:59.00,Default,,0,0,0,,{\an7\pos(0,0)\bord0\shad0\1c&HF65CA8&\p1}m 1036 282 l 1036 282 l 1042 287 l 1048 293 l 1053 299 l 1058 306 l 1062 313 l 1066 320 l 1069 328 l 1072 336 l 1074 343 l 1076 352 l 1077 360 l 1078 368 l 1078 376 l 1077 384 l 1076 392 l 1074 401 l 1072 408 l 1069 416 l 1066 424 l 1062 431 l 1058 438 l 1053 445 l 1048 451 l 1042 457 l 1036 462 l 1029 467 l 1023 472 l 1015 476 l 1008 480 l 1000 483 l 993 485 l 985 487 l 976 489 l 968 490 l 960 490 l 952 490 l 944 489 l 935 487 l 927 485 l 920 483 l 912 480 l 905 476 l 897 472 l 891 467 l 884 462 l 878 457 l 872 451 l 867 445 l 862 438 l 858 431 l 854 424 l 851 416 l 848 408 l 846 401 l 844 392 l 843 384 l 842 376 l 842 368 l 843 360 l 844 352 l 846 343 l 848 336 l 851 328 l 854 320 l 858 313 l 862 306 l 867 299 l 872 293 l 878 287 l 884 282 l 903 305 l 899 309 l 895 313 l 891 318 l 887 323 l 884 328 l 881 333 l 878 339 l 876 345 l 875 351 l 873 357 l 872 363 l 872 369 l 872 375 l 872 381 l 873 387 l 875 393 l 876 399 l 878 405 l 881 411 l 884 416 l 887 421 l 891 426 l 895 431 l 899 435 l 903 439 l 908 443 l 913 447 l 919 450 l 924 452 l 930 455 l 936 457 l 942 458 l 948 459 l 954 460 l 960 460 l 966 460 l 972 459 l 978 458 l 984 457 l 990 455 l 996 452 l 1001 450 l 1007 447 l 1012 443 l 1017 439 l 1021 435 l 1025 431 l 1029 426 l 1033 421 l 1036 416 l 1039 411 l 1042 405 l 1044 399 l 1045 393 l 1047 387 l 1048 381 l 1048 375 l 1048 369 l 1048 363 l 1047 357 l 1045 351 l 1044 345 l 1042 339 l 1039 333 l 1036 328 l 1033 323 l 1029 318 l 1025 313 l 1021 309 l 1017 305{\p0}
+Dialogue: 0,0:00:00.00,9:59:59.00,Default,,0,0,0,,{\an7\pos(0,0)\bord0\shad0\1c&H3CC8FF&\p1}m 926 372 b 926 353.2218 941.2218 338 960 338 b 978.7782 338 994 353.2218 994 372 b 994 390.7782 978.7782 406 960 406 b 941.2218 406 926 390.7782 926 372{\p0}
+Dialogue: 0,0:00:00.00,9:59:59.00,Default,,0,0,0,,{\an5\pos(960,600)\fnMonospace\fs52\b0\bord0\shad3\4c&H000000&\1c&H55FF33&}No channels yet
+Dialogue: 0,0:00:00.00,9:59:59.00,Default,,0,0,0,,{\an5\pos(960,668)\fnMonospace\fs32\b0\bord0\shad3\4c&H000000&\1c&HAAAAAA&}Open the settings page to point this at your shows.
+Dialogue: 0,0:00:00.00,9:59:59.00,Default,,0,0,0,,{\an5\pos(960,776)\fnMonospace\fs34\b0\bord0\shad3\4c&H000000&\1c&H55FF33&}Please stand by...
+Dialogue: 0,0:00:00.00,9:59:59.00,Default,,0,0,0,,{\an7\pos(0,0)\bord0\shad0\1c&H303030&\1a&H00&\p1}m 650 836 l 1270 836 l 1270 842 l 650 842{\p0}
+Dialogue: 0,0:00:00.00,9:59:59.00,Default,,0,0,0,,{\an7\pos(0,0)\bord0\shad0\1c&H55FF33&\1a&H00&\p1}m 650 836 l 800 836 l 800 842 l 650 842{\p0}
+Dialogue: 0,0:00:00.00,9:59:59.00,Default,,0,0,0,,{\an5\pos(960,928)\fnMonospace\fs44\b1\bord0\shad3\4c&H000000&\1c&H3CC8FF&}http://192.168.10.153:8008
+Dialogue: 0,0:00:00.00,9:59:59.00,Default,,0,0,0,,{\an5\pos(960,984)\fnMonospace\fs26\b0\bord0\shad3\4c&H000000&\1c&H888888&}Open this on any computer or phone on your network
