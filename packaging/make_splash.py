@@ -53,14 +53,25 @@ def _font(size: int):
     return ImageFont.load_default()
 
 
-def build(dest: Path) -> Path:
-    from PIL import Image, ImageDraw
+def build(dest: Path, *, wordmark: bool = False) -> Path:
+    """The mark alone by default.
 
-    canvas = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
+    A name under the logo is what a *product* does on a splash screen; a television just
+    comes on. The mark is already the whole joke, and it does not need captioning — which
+    is the same reasoning that took the channel numbers out of the on-screen furniture.
+    """
+    from PIL import Image, ImageDraw
 
     # Transparent background, not the icon's filled one — otherwise the mark arrives as a
     # near-black square floating on Plymouth's black, with a visible edge.
     mark = draw_icon(MARK_PX, bg=(0, 0, 0, 0))
+
+    if not wordmark:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        mark.save(dest)
+        return dest
+
+    canvas = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
     canvas.paste(mark, ((CANVAS - MARK_PX) // 2, int(CANVAS * 0.10)), mark)
 
     draw = ImageDraw.Draw(canvas)
@@ -90,11 +101,14 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="make_splash", description=__doc__)
     ap.add_argument("--out", type=Path,
                     default=Path(__file__).resolve().parent / "assets" / "splash.png")
+    ap.add_argument("--wordmark", action="store_true",
+                    help="set the name beneath the mark (off by default)")
     args = ap.parse_args(argv)
 
-    out = build(args.out)
-    size = out.stat().st_size
-    print(f"\n  {out}  ({CANVAS}x{CANVAS}, {size / 1024:.0f} KB)\n")
+    out = build(args.out, wordmark=args.wordmark)
+    from PIL import Image
+    w, h = Image.open(out).size
+    print(f"\n  {out}  ({w}x{h}, {out.stat().st_size / 1024:.0f} KB)\n")
     return 0
 
 
