@@ -42,6 +42,32 @@ class TuneResult:
     error: str | None = None
 
 
+def _known_options(binary: str) -> set[str]:
+    """Which --options this mpv build actually accepts.
+
+    mpv treats an unknown option as a *fatal* error: it prints one line and exits before
+    creating the IPC socket, so the caller sees "socket never appeared" and none of the
+    three words that would explain why. That is what --auto-window-resize did here — added
+    in a later mpv than Debian Bookworm ships, present on the Mac's Homebrew build, so the
+    box worked in development and died on the appliance.
+
+    Probing once and filtering is cheaper than pinning a version, and it degrades the right
+    way: a missing cosmetic option costs the cosmetic behaviour, not the television.
+    """
+    try:
+        result = subprocess.run([binary, "--list-options"],
+                                capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return set()
+
+    names = set()
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if line.startswith("--"):
+            names.add(line.split()[0].split("=")[0])
+    return names
+
+
 class MpvPlayer:
     def __init__(
         self,
@@ -88,18 +114,48 @@ class MpvPlayer:
             "--keep-open=no",
             "--hr-seek=no",           # keyframe seeking: flat latency regardless of GOP
             "--osd-level=0",
+            # mpv's on-screen controller draws its own idle screen when no file is loaded:
+            # a coloured field, the mpv logo, and "Drop files or URLs to play here." All
+            # three appeared *underneath* the standby card. There is no seek bar on a
+            # television anyway.
+            "--osc=no",
             "--no-input-default-bindings",
             "--cache=yes",
             "--demuxer-max-bytes=64MiB",
-            # A television does not change size when the programme does. mpv resizes its
-            # window to each new file by default, so a 640x480 commercial inside a 720p show
-            # makes the window jump on every ad break. Both flags are needed: one sets the
-            # size once, the other stops it being reconsidered.
-            "--auto-window-resize=no",
-            "--autofit=1280x720",
-            "--keepaspect-window=no",
             f"--input-ipc-server={self.socket_path}",
         ]
+
+        # A television does not change size when the programme does. mpv resizes its window
+        # to each new file by default, so a 640x480 commercial inside a 720p show makes the
+        # window jump on every ad break.
+        #
+        # Windowed only. These are window-geometry options and there is no window on a DRM
+        # appliance — but mpv still honoured --autofit by sizing an internal surface, which
+        # DRM then upscaled to the panel's 3840x2160 while the OSD drew at native. The
+        # result on a 4K TV was every element of the standby card rendered twice, once
+        # crisp and once blurred and offset.
+        if not self.fullscreen:
+            args += ["--auto-window-resize=no", "--autofit=1280x720",
+                     "--keepaspect-window=no"]
+
+        # Drop anything this build does not know. An unknown option is fatal to mpv, and
+        # every option above that could be missing is cosmetic — losing one should cost a
+        # nicety, never the picture.
+        known = _known_options(self.mpv_binary)
+        if known:
+            def supported(arg: str) -> bool:
+                name = arg.split("=")[0]
+                # mpv lists a flag as --foo and accepts --no-foo as its negation, so the
+                # negated spelling never appears in --list-options. Checking only the
+                # literal name would drop --no-input-default-bindings and quietly hand the
+                # viewer mpv's entire default keymap.
+                return name in known or ("--" + name[5:]) in known and name.startswith("--no-")
+
+            dropped = [a for a in args if a.startswith("--") and not supported(a)]
+            if dropped:
+                print(f"  mpv {self.mpv_binary} does not support: "
+                      f"{', '.join(sorted(set(a.split('=')[0] for a in dropped)))}")
+                args = [a for a in args if a not in dropped]
         if self.fullscreen:
             args.append("--fullscreen=yes")
         if self.video_output:

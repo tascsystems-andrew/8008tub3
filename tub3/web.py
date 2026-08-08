@@ -29,6 +29,7 @@ from urllib.parse import urlparse
 VENDOR = Path(__file__).resolve().parent.parent / "vendor" / "FieldStation42"
 DB = VENDOR / "runtime" / "fs42_fluid.db"
 SETTINGS = Path(__file__).resolve().parent.parent / "settings.json"
+REBUILD_LOG = Path(__file__).resolve().parent.parent / "last-rebuild.log"
 
 DEFAULTS = {
     "ad_load": 3,          # 1..5; 3 is broadcast-realistic
@@ -732,21 +733,42 @@ def _rebuild(settings: dict) -> None:
 
     content_share = AD_LOAD[int(settings.get("ad_load", 3))][0]
     repo = Path(__file__).resolve().parent.parent
+
+    # Build with the build interpreter, not this one. The two sides are split on purpose:
+    # the tuner and this settings server run on system Python with mpv and the standard
+    # library, so a broken build environment cannot stop the television starting, while
+    # bootstrap needs moviepy, ffmpeg-python and Pillow from .venv-build.
+    #
+    # Spawning with sys.executable therefore ran bootstrap under the interpreter that
+    # deliberately lacks its dependencies, and it died on `import PIL` while drawing the
+    # station idents — after doing all the slow work of walking the library.
+    build_python = repo / ".venv-build" / "bin" / "python"
+    interpreter = str(build_python) if build_python.exists() else sys.executable
+
     # --programs is repeatable, one flag per folder.
     programs: list[str] = []
     for folder in settings.get("programs_dirs") or []:
         programs += ["--programs", folder]
-    subprocess.run(
-        [sys.executable, "-m", "tub3.bootstrap",
+    command = [interpreter, "-m", "tub3.bootstrap",
          *programs,
          "--ads", settings["commercials_dir"],
          "--media-root", str(repo / "media"),
          "--channel", "3",
          "--cooldown", str(settings.get("cooldown_minutes", 45)),
-         "--days", "1"],
+         "--days", "1"]
+    result = subprocess.run(
+        command,
         cwd=repo, env={**os.environ, "TUB3_CONTENT_SHARE": str(content_share)},
-        capture_output=True,
+        capture_output=True, text=True,
     )
+    # Keep the output. This ran with capture_output and no reader, so a bootstrap that
+    # failed left the page saying "Rebuild started" forever with nothing to look at.
+    try:
+        REBUILD_LOG.write_text(
+            f"$ {' '.join(command)}\n\n{result.stdout or ''}\n{result.stderr or ''}"
+        )
+    except OSError:
+        pass
 
 
 def serve(host: str = "0.0.0.0", port: int = 8008) -> None:

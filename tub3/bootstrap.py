@@ -48,6 +48,10 @@ SHOWS_TAG = "shows"
 COMMERCIAL_TAG = "commercial"
 BUMP_TAG = "bump"
 
+# How many files to probe when deriving block length. Enough for a stable median, few
+# enough to finish in seconds on a network share.
+SAMPLE_SIZE = 60
+
 # Rating ladder, least to most permissive. A ceiling is cumulative: a channel rated `family`
 # draws from kids *and* family spots, not family alone.
 #
@@ -316,22 +320,45 @@ def choose_increment(programs: list[Path] | Path) -> tuple[int, float, int]:
     from mediakit.ffmpeg import probe  # noqa: PLC0415
 
     folders = [programs] if isinstance(programs, Path) else list(programs)
-    durations = []
+
+    files: list[Path] = []
     for folder in folders:
         for path in sorted(folder.rglob("*")):
             if not path.is_file() or path.suffix.lower() not in VIDEO_SUFFIXES:
                 continue
             if path.name.startswith("."):
                 continue
-            try:
-                info = probe(path)
-            except Exception:  # noqa: BLE001
-                continue
-            if info.duration > 0:
-                durations.append(info.duration)
+            files.append(path)
+
+    if not files:
+        return 30, 0.0, 0
+
+    # Sample, do not measure. Every probe opens a file, and over a network share that is a
+    # round trip — a three thousand file library on a NAS across a VPN took long enough that
+    # the process sat in uninterruptible sleep with zero CPU while a user watched a blank
+    # screen. tub3.inventory already worked this out; this is the same lesson.
+    #
+    # Spread the sample evenly across the sorted list rather than taking the first N: a
+    # library sorted by folder would otherwise be judged entirely on whichever series comes
+    # first alphabetically, and a channel of half-hour sitcoms whose first folder happens to
+    # be a film gets hour-long blocks.
+    step = max(1, len(files) // SAMPLE_SIZE)
+    sampled = files[::step][:SAMPLE_SIZE]
+
+    durations = []
+    for path in sampled:
+        try:
+            info = probe(path)
+        except Exception:  # noqa: BLE001
+            continue
+        if info.duration > 0:
+            durations.append(info.duration)
 
     if not durations:
         return 30, 0.0, 0
+
+    if not durations:
+        return 30, 0.0, len(files)
 
     durations.sort()
     median = durations[len(durations) // 2]
@@ -342,11 +369,11 @@ def choose_increment(programs: list[Path] | Path) -> tuple[int, float, int]:
     # up, doubling the advertising. Scoring the outcome directly cannot do that.
     candidates = [m for m in STANDARD_BLOCKS if m * 60 >= median]
     if not candidates:
-        return STANDARD_BLOCKS[-1], median, len(durations)
+        return STANDARD_BLOCKS[-1], median, len(files)
 
     target_ad_share = 1.0 - CONTENT_SHARE
     best = min(candidates, key=lambda m: abs((1.0 - median / (m * 60)) - target_ad_share))
-    return best, median, len(durations)
+    return best, median, len(files)
 
 
 def check_layout(media_root: Path) -> list[str]:

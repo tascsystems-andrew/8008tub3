@@ -140,6 +140,76 @@ def build_drivers(player: MpvPlayer, *, headless: bool) -> list[Driver]:
     return drivers
 
 
+def wait_for_channels(player: MpvPlayer, db: Path, web_port: int,
+                      poll: float = 0.25) -> list[tuple[int, str]] | None:
+    """Hold the standby card until a schedule exists, then return the channels.
+
+    Returns None if the player goes away — the user quit, or mpv died — so the caller can
+    exit cleanly rather than spinning against a dead socket.
+
+    The screen redraws four times a second because it carries a moving sweep. That is the
+    entire point of it: building a schedule across a network share takes minutes with no
+    natural progress signal, and a still screen is indistinguishable from a hung one. The
+    cost is an IPC message per redraw, which is nothing next to a user power-cycling the
+    box halfway through a build because they thought it had died.
+    """
+    import time
+
+    from tuner.standby import Standby
+
+    card = Standby(web_url=f"http://{local_ip()}:{web_port}")
+    print("  no channels yet — showing the standby card")
+
+    building_since = 0.0
+    last_check = 0.0
+    while True:
+        now = time.time()
+
+        # Checking the database is cheap; checking for a running build is a process scan,
+        # so do both on a slower clock than the redraw.
+        if now - last_check >= 2.0:
+            last_check = now
+            channels = discover_channels(db)
+            if channels:
+                player.hide_overlay(2)
+                print(f"  schedule appeared — {len(channels)} channel(s)")
+                return channels
+
+            building = _rebuild_running()
+            if building and not building_since:
+                building_since = now
+            elif not building:
+                building_since = 0.0
+
+            card.building = bool(building_since)
+            if building_since:
+                minutes = int((now - building_since) // 60)
+                card.headline = "Building your channel"
+                card.detail = (f"Reading your library over the network"
+                               + (f" — {minutes} min so far" if minutes else ""))
+            else:
+                card.headline = "No channels yet"
+                card.detail = "Open the settings page to point this at your shows."
+
+        try:
+            player.show_overlay(card.render_ass(now), overlay_id=2)
+        except (OSError, BrokenPipeError, RuntimeError):
+            return None
+        time.sleep(poll)
+
+
+def _rebuild_running() -> bool:
+    """Is a schedule build in flight? Used only to change what the screen says."""
+    import subprocess
+
+    try:
+        result = subprocess.run(["pgrep", "-f", "tub3[.]bootstrap"],
+                                capture_output=True, timeout=3)
+        return result.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="tub3", description=__doc__)
     ap.add_argument("--db", type=Path, default=DB)
@@ -158,17 +228,6 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     channels = discover_channels(args.db)
-    if not channels:
-        print("No channels have a schedule yet.\n"
-              "  Build one:  python3 -m tub3.bootstrap --programs DIR --ads DIR "
-              "--media-root DIR --channel 3", file=sys.stderr)
-        return 1
-
-    lineup = Lineup([
-        LiquidChannel(number, name, args.db, name)
-        for number, name in channels
-    ])
-
     print(f"\n  {len(channels)} channel(s)")
     for number, name in channels:
         print(f"    {number:>3}  {name}")
@@ -204,6 +263,19 @@ def main(argv: list[str] | None = None) -> int:
 
         threading.Thread(target=_serve, daemon=True).start()
         print(f"  settings: http://{local_ip()}:{args.web_port}")
+
+    # Nothing configured yet: hold the standby card until a schedule appears, rather than
+    # exiting. Exiting meant systemd restarted the process every three seconds and the TV
+    # showed a Linux login prompt — the state every first-time user starts in.
+    if not channels:
+        channels = wait_for_channels(player, args.db, args.web_port)
+        if channels is None:
+            return 0
+
+    lineup = Lineup([
+        LiquidChannel(number, name, args.db, name)
+        for number, name in channels
+    ])
 
     drivers = build_drivers(player, headless=args.headless)
     print(f"  input: {', '.join(d.name for d in drivers)}")
