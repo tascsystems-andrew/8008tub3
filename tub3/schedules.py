@@ -143,16 +143,34 @@ def schedule_all(
         # Counting links is a local directory walk over symlinks — no NAS traffic — and it is
         # a good enough proxy for how long the scan behind it will take.
         def weight(conf: dict) -> int:
-            # `os.walk(followlinks=True)`, not `Path.rglob`: a station directory is entirely
-            # symlinks to the pools, and rglob does not descend through a symlinked
-            # directory. It counted the tags rather than the files, so a two-tag channel with
-            # a thousand episodes sorted ahead of a four-tag channel with two hundred and the
-            # ordering did the opposite of its job.
+            """How many spots and episodes this station draws on. Names only, never stats.
+
+            Two wrong versions preceded this one, and both were the same misunderstanding of
+            what a pool is — a directory of symlinks to files on the NAS.
+
+            `Path.rglob` does not descend through a symlinked directory, so it counted each
+            station's *tags*: a two-tag channel with a thousand episodes sorted ahead of a
+            four-tag channel with two hundred, and the ordering did the exact opposite of its
+            job. `os.walk(followlinks=True)` fixed the counting and broke something worse — it
+            calls `is_dir()` on every entry, which follows each link through to the NAS. That
+            is eleven thousand stat calls across a saturated mount to sort a list of ten, and
+            it wedged the build in disk-sleep before it printed a single line.
+
+            `os.listdir` returns names without stat'ing any of them, so this stays entirely
+            local. Nested bump directories count as two entries rather than their contents,
+            which is a rounding error against pools of hundreds.
+            """
+            root = conf["content_dir"]
+            total = 0
             try:
-                return sum(len(files) for _, _, files
-                           in os.walk(conf["content_dir"], followlinks=True))
+                for tag in os.listdir(root):
+                    try:
+                        total += len(os.listdir(os.path.join(root, tag)))
+                    except OSError:
+                        continue
             except OSError:
                 return 1 << 30
+            return total
         wanted.sort(key=weight)
         _say("  order: " + " → ".join(f"{c['channel_number']}" for c in wanted))
 
