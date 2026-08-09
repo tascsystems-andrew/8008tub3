@@ -42,6 +42,7 @@ scancode: it drives its diode in hardware, so it can never be a button.
 
 from __future__ import annotations
 
+import re
 import sys
 from dataclasses import dataclass
 from enum import Enum
@@ -155,7 +156,12 @@ class EvdevDriver(Driver):
             if not data or len(data) < size:
                 break
             _, _, etype, code, value = struct.unpack(fmt, data)
-            if etype != 0x01 or value != 1:  # EV_KEY, key-down only
+            # EV_KEY, and key-*down* specifically. value 2 is the kernel's autorepeat, which
+            # is what a held button produces, and dropping it is what makes a long press do
+            # exactly what a short press does — once. Nothing here needs changing for that;
+            # it is called out because it is easy to "fix" by accepting repeats and thereby
+            # make a slightly-too-long press spray the dial.
+            if etype != 0x01 or value != 1:
                 continue
             if code in EVDEV_DIGITS:
                 yield Event(Verb.DIGIT, digit=EVDEV_DIGITS[code], source=self.name)
@@ -351,6 +357,34 @@ class CecDriver(Driver):
 
     name = "cec"
 
+    # `cec-ctl --monitor` prints the *decoded* argument, not the raw byte:
+    #
+    #     USER_CONTROL_PRESSED (0x44):
+    #             ui-cmd: channel-up (0x30)
+    #     USER_CONTROL_RELEASED (0x45)
+    #
+    # so the code has to be taken from the parenthesised hex at the end. The obvious pattern —
+    # a hex run straight after `ui-cmd:` — matches the *name* instead, and does it silently:
+    # `channel-up` yields `c`, which is a real CEC code (0x0C, page up) and simply isn't in
+    # the map, while `up` and `select` fail to match at all. That was the live behaviour here,
+    # and its symptom is the worst kind: the TV's own remote does nothing whatsoever, with no
+    # error anywhere, on a box where four other input drivers are working.
+    #
+    # A command cec-ctl has no name for prints as a bare decimal, hence the second pattern.
+    UI_HEX = re.compile(r"ui-cmd:.*\(0x([0-9a-fA-F]{1,2})\)")
+    UI_DEC = re.compile(r"ui-cmd:\s*(\d{1,3})\s*$")
+    RELEASED = re.compile(r"USER_CONTROL_RELEASED")
+
+    # A held remote button repeats USER_CONTROL_PRESSED on the wire several times a second
+    # until USER_CONTROL_RELEASED arrives. Those repeats are one press, so they are dropped:
+    # holding a button slightly too long does what a short press does, once. This box is
+    # driven by rapid separate clicks rather than by holding, and a held CHANNEL UP racing
+    # through the dial is exactly the behaviour that reads as broken.
+    #
+    # Not every television sends the release. So a repeat arriving after a long gap counts as
+    # a fresh press, and a missed release can never wedge a button down forever.
+    REPEAT_GAP = 1.2
+
     def __init__(self, device: str = "/dev/cec0"):
         self.device = device
         self._proc = None
@@ -361,20 +395,38 @@ class CecDriver(Driver):
         return Path(self.device).exists() and shutil.which("cec-ctl") is not None
 
     def events(self) -> Iterator[Event]:
-        import re
         import subprocess
+        import time
 
         self._proc = subprocess.Popen(
             ["cec-ctl", "-d", self.device, "--monitor"],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
         )
-        pattern = re.compile(r"ui-cmd:\s*(?:0x)?([0-9a-fA-F]+)")
         assert self._proc.stdout is not None
+
+        held: int | None = None
+        held_at = 0.0
         for line in self._proc.stdout:
-            match = pattern.search(line)
-            if not match:
+            if self.RELEASED.search(line):
+                held = None
                 continue
-            code = int(match.group(1), 16)
+
+            match = self.UI_HEX.search(line)
+            code = int(match.group(1), 16) if match else None
+            if code is None:
+                match = self.UI_DEC.search(line)
+                code = int(match.group(1)) if match else None
+            if code is None:
+                continue
+
+            now = time.monotonic()
+            if code == held and now - held_at < self.REPEAT_GAP:
+                # Still the same finger on the same button. Keep the clock running, so the
+                # hold stays recognised for as long as the repeats keep coming.
+                held_at = now
+                continue
+            held, held_at = code, now
+
             if code in CEC_DIGITS:
                 yield Event(Verb.DIGIT, digit=CEC_DIGITS[code], source=self.name)
             elif code in CEC_MAP:
