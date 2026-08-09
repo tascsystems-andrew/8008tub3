@@ -398,7 +398,17 @@ def main(argv: list[str] | None = None) -> int:
     # Apply the saved value at startup, or the menu would say On over a picture with none.
     player.set_subtitles(state.get("subtitles") == "On")
 
-    box = Box(lineup, player, start_channel=args.channel or channels[0][0], state=state)
+    # Come up on the ambiance channel when there is one.
+    #
+    # It is the only channel that cannot be broken: no schedule, no catalogue, no NAS. A box
+    # that restarts during a build, or after a library change invalidated a schedule, still
+    # arrives at a picture instead of an off-air card — and the first thing anyone sees after
+    # a power cut should not be the middle of an episode nobody chose.
+    # `ambiance.number`, not the constant: the constant is imported inside a conditional
+    # above, so referring to it here works only by short-circuit evaluation. The object knows
+    # its own number and cannot be out of scope.
+    start = args.channel or (ambiance.number if ambiance else channels[0][0])
+    box = Box(lineup, player, start_channel=start, state=state)
     try:
         box.run(drivers)
     except KeyboardInterrupt:
