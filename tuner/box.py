@@ -31,6 +31,7 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from typing import Callable
 
 from .input import Driver, Event, Verb
 from .menu import Menu, build_root
@@ -128,8 +129,11 @@ class Box:
         *,
         start_channel: int | None = None,
         state: dict | None = None,
+        rescan: Callable[[], list] | None = None,
     ):
         self.lineup = lineup
+        self._rescan_for = rescan
+        self._rescanned_at = 0.0
         self.player = player
         self.mode = Mode.WATCH
         self.menu = Menu(build_root(state or {}))
@@ -175,6 +179,14 @@ class Box:
     # run at that rate — flooding that socket is what took the tuner down once already.
     TICK = 0.05
     HOUSEKEEPING = 0.25
+
+    # How often the dial is re-read. Channels arrive *while the box is on*: a schedule build
+    # runs for hours and finishes one station at a time, so the dial legitimately grows over
+    # an evening. Until now that needed a restart to show up — the box discovered its channels
+    # once and never looked again — which is a strange thing to ask of a television, and it
+    # showed up exactly as you would expect: two stations finished building, and neither the
+    # dial nor the guide knew they existed.
+    RESCAN = 60.0
 
     # ---------- tuning ----------
 
@@ -416,6 +428,37 @@ class Box:
         self.bug = BugState(airing=airing, shown_at=time.monotonic())
         self._redraw()
 
+    def _rescan(self) -> None:
+        """Pick up channels that have started existing since the box came on.
+
+        Additive only. A station whose schedule has run out must not vanish from under
+        somebody watching it — it has its own OFF AIR card for that — and a dial that
+        renumbers itself while in use is worse than one that is briefly out of date.
+
+        Rebuilding the channel objects each pass is deliberate and free: `LiquidChannel`
+        holds a path and a station name and reads nothing until asked, so the ones already
+        known are simply dropped.
+        """
+        if self._rescan_for is None:
+            return
+        try:
+            found = self._rescan_for()
+        except Exception:  # noqa: BLE001 - a bad read must not take the television down
+            return
+
+        known = set(self.lineup.numbers)
+        fresh = [channel for channel in found if channel.number not in known]
+        if not fresh:
+            return
+
+        self.lineup.channels.extend(fresh)
+        self.lineup.channels.sort(key=lambda channel: channel.number)
+        for channel in sorted(fresh, key=lambda c: c.number):
+            print(f"    {channel.number:>3}  {channel.name}  — now on air")
+        # The listings cache is keyed on nothing but age, so force the next redraw to rebuild
+        # rather than leave the new channel missing from the guide for up to its TTL.
+        self._guide_rows_at = 0.0
+
     def _digits_are_final(self) -> bool:
         """True when no channel on the dial extends what has been typed.
 
@@ -571,6 +614,11 @@ class Box:
                 if now - housekept_at < self.HOUSEKEEPING:
                     continue
                 housekept_at = now
+
+                if now - self._rescanned_at >= self.RESCAN:
+                    self._rescanned_at = now
+                    with self._lock:
+                        self._rescan()
 
                 with self._lock:
                     # The bug fades on its own; redraw only on the transition.
