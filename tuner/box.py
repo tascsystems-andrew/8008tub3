@@ -140,6 +140,11 @@ class Box:
         self._power = power
         self.asleep = False
         self._power_pending = False
+        # An AirPlay session owns the screen. Unlike standby, this is not something the
+        # viewer asked the box for — a phone decided — so the box's job is to get out of the
+        # way quickly and take the screen back the moment the session ends.
+        self.casting = False
+        self._cast = None
         self.player = player
         self.mode = Mode.WATCH
         self.menu = Menu(build_root(state or {}))
@@ -471,6 +476,57 @@ class Box:
             self.player.hide_overlay(overlay_id=overlay)
         self.player.stop()
 
+    # ---------- airplay ----------
+
+    def begin_cast(self) -> None:
+        """A phone is taking the screen. Yield it, now.
+
+        Called from the watcher thread the instant uxplay names the client, which happens
+        several RTSP exchanges before any video flows. That head start is the whole budget:
+        mpv holds DRM master until it exits, so it has to be gone before uxplay's pipeline
+        asks for the display.
+
+        Which is why this quits the player rather than pausing it. There is no way to make
+        mpv let go of DRM while it lives — no property, no command — so the only lever is the
+        process. It costs a relaunch coming back, which against a session measured in minutes
+        is not a cost at all.
+
+        No handover card. There is nowhere to draw one: the player that would draw it is the
+        thing being taken down, and a card that flashes for a fifth of a second and is then
+        replaced by a phone's screen is worse than a clean cut.
+        """
+        if self.casting:
+            return
+        self.casting = True
+        self._settle_at = 0.0
+        self._tuning = ""
+        self._tune_seq += 1
+        self.bug = BugState()
+        self.mode = Mode.WATCH
+        self.menu.visible = False
+        self._guide = None
+        self._guide_ass = None
+        self._looping = False
+        self._on_air = None
+        print("  airplay: session starting — releasing the screen")
+        self.player.release()
+
+    def end_cast(self) -> None:
+        """The session is over. Take the television back."""
+        if not self.casting:
+            return
+        self.casting = False
+        print("  airplay: session ended — resuming the dial")
+        try:
+            self.player.resume()
+        except Exception as exc:  # noqa: BLE001
+            # A player that will not come back is fatal in a way nothing else here is, and
+            # the run loop's own liveness check is the right place to notice it.
+            print(f"  airplay: could not restart the player: {exc}")
+            self.running = False
+            return
+        self.tune(self.channel)
+
     def _apply_power(self) -> None:
         """The slow half: the television itself."""
         if self._power is not None:
@@ -575,6 +631,16 @@ class Box:
 
     def handle(self, event: Event) -> None:
         with self._lock:
+            if self.casting:
+                # Any button takes the television back. A phone that walks off the network
+                # never sends TEARDOWN, so without this the box sits on a dead AirPlay screen
+                # with no way out but a power cycle — and the one thing to hand is the remote.
+                if self._cast is not None:
+                    self._cast.ended()
+                else:
+                    self.end_cast()
+                return
+
             if self.asleep:
                 # Anything wakes it. A box that is off and answers only one of its ten
                 # buttons looks broken, and from the sofa there is no way to tell which
@@ -654,6 +720,12 @@ class Box:
         try:
             while self.running:
                 time.sleep(self.TICK)
+                if self.casting:
+                    # The player is deliberately gone and a phone has the screen. Every check
+                    # below assumes an mpv to talk to, and the liveness check immediately
+                    # after this would read a released player as a crash and shut the box
+                    # down — turning the first AirPlay session into the last one.
+                    continue
                 if not self.player.alive:
                     # mpv exited — usually because the viewer quit. Ending the loop here is
                     # the difference between a clean shutdown and a broken-pipe traceback.

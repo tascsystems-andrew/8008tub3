@@ -289,6 +289,42 @@ class MpvPlayer:
             except OSError:
                 pass
 
+    def release(self) -> None:
+        """Quit mpv and give up the display, leaving this object reusable.
+
+        The only way to hand DRM master to another program. mpv holds it for the life of its
+        video output and offers no way to drop it — there is no property, no command, and no
+        signal. So the player goes away entirely and comes back afterwards.
+
+        That costs a relaunch on the return, a second or two, which is the correct trade
+        against a session measured in minutes and no trade at all against the alternative,
+        which is that AirPlay cannot exist on a box with no compositor.
+        """
+        self.close()
+        self.alive = False
+        self.proc = None
+        self._sock = None
+
+    def resume(self, timeout: float = 10.0) -> None:
+        """Come back after `release`, as a genuinely fresh process.
+
+        Every field reset here is per-process state that would otherwise be a lie about the
+        new mpv: a request counter it never issued, a half-read reply from the old socket, a
+        fullscreen flag claiming a window that no longer exists.
+
+        `_splash_dismissed` is the exception and is set the other way on purpose. The boot
+        splash was taken down hours ago; a fresh player must not go looking for plymouth
+        again on its first frame.
+        """
+        self._buffer = b""
+        self._request_id = 0
+        self._fullscreen_applied = False
+        self._splash_dismissed = True
+        self._backdrop = False
+        self._dropping = False
+        self.alive = True
+        self.start(timeout=timeout)
+
     # ---------- IPC ----------
 
     def _send(self, payload: dict) -> None:

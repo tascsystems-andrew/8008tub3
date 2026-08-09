@@ -449,6 +449,19 @@ def main(argv: list[str] | None = None) -> int:
 
     box = Box(lineup, player, start_channel=start, state=state,
               rescan=rescan, power=power)
+
+    # AirPlay, if the receiver is running. Deliberately not required and never fatal: the
+    # unit is separate, it may be stopped or absent, and a television whose channels work is
+    # not broken because a phone cannot mirror to it.
+    try:
+        from tuner.cast import CastWatcher  # noqa: PLC0415
+
+        watcher = CastWatcher(on_start=box.begin_cast, on_end=box.end_cast)
+        box._cast = watcher
+        watcher.start()
+        print("  airplay: watching for sessions")
+    except Exception as exc:  # noqa: BLE001
+        print(f"  airplay: not watching ({exc})")
     try:
         box.run(drivers)
     except KeyboardInterrupt:
