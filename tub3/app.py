@@ -408,7 +408,18 @@ def main(argv: list[str] | None = None) -> int:
     # above, so referring to it here works only by short-circuit evaluation. The object knows
     # its own number and cannot be out of scope.
     start = args.channel or (ambiance.number if ambiance else channels[0][0])
-    box = Box(lineup, player, start_channel=start, state=state)
+
+    def rescan() -> list[LiquidChannel]:
+        """The dial as the schedule database currently describes it.
+
+        A schedule build runs for hours and commits one station at a time, so channels come
+        on air during an evening's viewing. `Box` merges what is new and ignores the rest;
+        this only has to answer the question, not work out what changed.
+        """
+        return [LiquidChannel(number, name, args.db, name)
+                for number, name in discover_channels(args.db)]
+
+    box = Box(lineup, player, start_channel=start, state=state, rescan=rescan)
     try:
         box.run(drivers)
     except KeyboardInterrupt:
