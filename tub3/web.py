@@ -273,6 +273,61 @@ def channel_status() -> list[dict]:
         conn.close()
 
 
+def guide_rows(hours: float = 3.0) -> dict:
+    """The listings, as data, for a screen that does not have to crawl.
+
+    The television's guide scrolls because that is what a cable guide *was* — the pace is
+    most of the character, and on a sofa you cannot scroll anyway. A browser is the opposite
+    situation: there is a pointer, there is room, and the reason anyone opens this page is to
+    find something specific without waiting for it to come round again.
+
+    So it reuses the tuner's own row builder and none of its presentation. Same schedule,
+    same titles, same window arithmetic — but three hours instead of ninety minutes, because
+    a phone held in the hand can carry more than a grid read across a room.
+    """
+    import time as _time
+
+    from tuner.guide import rows_from_lineup  # noqa: PLC0415
+    from tuner.schedule import LiquidChannel, Lineup  # noqa: PLC0415
+
+    from .app import discover_channels  # noqa: PLC0415
+    from .lineup import GUIDE_CHANNEL  # noqa: PLC0415
+
+    now = _time.time()
+    try:
+        stations = [LiquidChannel(number, name, DB, name)
+                    for number, name in discover_channels(DB)]
+    except Exception:  # noqa: BLE001
+        return {"now": now, "rows": []}
+    if not stations:
+        return {"now": now, "rows": []}
+
+    # The window is widened by asking for more columns than the television draws. `window`
+    # rounds to the half hour, which is what makes the columns line up with real clock times
+    # rather than with whenever the page happened to load.
+    from tuner.guide import window  # noqa: PLC0415
+
+    begin, _ = window(now)
+    finish = begin + hours * 3600
+
+    rows = []
+    for row in rows_from_lineup(Lineup(stations), now, GUIDE_CHANNEL):
+        slots = []
+        for slot in row.slots:
+            if slot.end <= begin or slot.start >= finish:
+                continue
+            slots.append({
+                "title": slot.title,
+                "start": slot.start,
+                "end": slot.end,
+                "clipped": slot.start < begin,
+            })
+        rows.append({"number": row.number, "name": row.name, "slots": slots})
+
+    return {"now": now, "begin": begin, "end": finish,
+            "rows": sorted(rows, key=lambda r: r["number"])}
+
+
 def ad_inventory(commercials_dir: str) -> dict:
     """The arithmetic behind 'why do I keep seeing the same ad'.
 
@@ -685,6 +740,103 @@ refresh(); setInterval(refresh,15000);
 """
 
 
+GUIDE_PAGE = """<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BoobTube — Guide</title>
+<style>
+  :root {
+    --ink:#0E0C14; --panel:#1a1622; --edge:#2a2336;
+    --phosphor:#55FF33; --gold:#FFC83C; --purple:#A85CF6; --dim:#8b8b8b;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--ink); color:#e8e8e8;
+         font:15px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  header { padding:18px 20px 12px; border-bottom:3px solid var(--purple);
+           display:flex; align-items:baseline; gap:16px; flex-wrap:wrap; }
+  h1 { margin:0; font-size:26px; color:var(--gold); letter-spacing:.06em; }
+  .date { color:var(--dim); }
+  .clock { margin-left:auto; font-size:26px; color:var(--phosphor); }
+  .wrap { overflow-x:auto; padding:0 0 28px; }
+  table { border-collapse:collapse; min-width:900px; width:100%; }
+  th.time { position:sticky; top:0; background:var(--edge); color:var(--gold);
+            font-weight:700; text-align:left; padding:8px 10px; font-size:13px;
+            border-left:1px solid var(--ink); }
+  th.corner { position:sticky; left:0; top:0; z-index:2; background:var(--edge); width:190px; }
+  td.ch { position:sticky; left:0; background:var(--panel); padding:10px;
+          border-top:1px solid var(--ink); white-space:nowrap; }
+  td.ch b { color:var(--gold); font-size:19px; margin-right:8px; }
+  td.ch span { color:var(--phosphor); }
+  td.grid { padding:0; border-top:1px solid var(--ink); position:relative; height:52px; }
+  .bar { position:absolute; top:4px; bottom:4px; background:#241E2A;
+         border-left:3px solid var(--purple); padding:6px 9px; overflow:hidden;
+         white-space:nowrap; text-overflow:ellipsis; font-size:13px; }
+  .bar.on { background:#33294a; }
+  .bar .clip { color:var(--dim); }
+  .none { color:var(--dim); padding:10px; font-style:italic; }
+  .nowline { position:absolute; top:0; bottom:0; width:2px; background:var(--phosphor);
+             opacity:.8; z-index:1; }
+  footer { color:var(--dim); padding:0 20px 30px; font-size:13px; }
+  a { color:var(--phosphor); }
+</style>
+<header>
+  <h1>GUIDE</h1><span class="date" id="date"></span><span class="clock" id="clock"></span>
+</header>
+<div class="wrap"><table id="grid"></table></div>
+<footer id="foot">loading…</footer>
+<script>
+const COLS = 6;                       // half-hour columns across three hours
+function hhmm(t){ const d=new Date(t*1000);
+  return d.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}); }
+
+async function draw(){
+  let data;
+  try { data = await (await fetch('/api/guide')).json(); }
+  catch(e){ document.getElementById('foot').textContent = 'could not reach the box'; return; }
+
+  const {now, begin, end, rows} = data;
+  const span = end - begin;
+  document.getElementById('clock').textContent = hhmm(now);
+  document.getElementById('date').textContent =
+    new Date(now*1000).toLocaleDateString([], {weekday:'long', day:'numeric', month:'long'});
+
+  if(!rows.length){
+    document.getElementById('grid').innerHTML = '';
+    document.getElementById('foot').textContent = 'nothing scheduled yet';
+    return;
+  }
+
+  let head = '<tr><th class="corner"></th>';
+  for(let i=0;i<COLS;i++) head += `<th class="time">${hhmm(begin + i*1800)}</th>`;
+  head += '</tr>';
+
+  let body = '';
+  for(const row of rows){
+    body += `<tr><td class="ch"><b>${row.number}</b><span>${row.name}</span></td>`;
+    body += `<td class="grid" colspan="${COLS}"><div style="position:relative;height:100%">`;
+    if(!row.slots.length){ body += '<div class="none">Off air</div>'; }
+    for(const s of row.slots){
+      const left  = Math.max(0, (s.start - begin) / span * 100);
+      const right = Math.min(100, (s.end - begin) / span * 100);
+      if(right - left < 0.6) continue;              // too thin to carry a word
+      const live = (now >= s.start && now < s.end) ? ' on' : '';
+      const mark = s.clipped ? '<span class="clip">‹ </span>' : '';
+      body += `<div class="bar${live}" style="left:${left}%;width:${right-left}%" `
+            + `title="${s.title} · ${hhmm(s.start)}–${hhmm(s.end)}">${mark}${s.title}</div>`;
+    }
+    const nowPct = (now - begin) / span * 100;
+    body += `<div class="nowline" style="left:${nowPct}%"></div>`;
+    body += '</div></td></tr>';
+  }
+  document.getElementById('grid').innerHTML = head + body;
+  document.getElementById('foot').textContent =
+    `${rows.length} channels · ${hhmm(begin)}–${hhmm(end)} · refreshes every 30s`;
+}
+draw(); setInterval(draw, 30000);
+</script>
+"""
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "tub3"
 
@@ -708,6 +860,17 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+            return
+        if path == "/guide":
+            body = GUIDE_PAGE.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if path == "/api/guide":
+            self._json(guide_rows())
             return
         if path == "/api/status":
             settings = load_settings()
