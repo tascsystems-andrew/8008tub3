@@ -458,6 +458,7 @@ class Box:
         """
         self.asleep = not self.asleep
         self._power_pending = True
+        print(f"  power: {'standby' if self.asleep else 'wake'}")
         if not self.asleep:
             return
 

@@ -171,6 +171,24 @@ if ! visudo -c -f /etc/sudoers.d/tub3-nas >/dev/null 2>&1; then
     warn "sudoers snippet was rejected and has been removed — NAS mounting from the web UI"
     warn "will not work. Everything else is unaffected."
 fi
+# Shutting down from the sofa. The box lives behind a television and the only clean shutdown
+# before this was an ssh session, which is not a thing anyone has to hand while unplugging a
+# Pi to move it — so the alternative was pulling power from a running Linux box, which is how
+# a filesystem gets corrupted.
+#
+# Three exact command lines, same reasoning as the storage helper above: not a general grant.
+# `systemctl` with an argument is safe to name here precisely because sudoers matches the
+# whole command line, so this cannot be turned into "restart anything".
+cat > /etc/sudoers.d/tub3-power <<SUDO
+$RUN_USER ALL=(root) NOPASSWD: /bin/systemctl poweroff, /bin/systemctl reboot, /bin/systemctl restart tub3-tuner
+SUDO
+chmod 0440 /etc/sudoers.d/tub3-power
+if ! visudo -c -f /etc/sudoers.d/tub3-power >/dev/null 2>&1; then
+    rm -f /etc/sudoers.d/tub3-power
+    warn "sudoers snippet for power was rejected and has been removed — the on-screen"
+    warn "Shut down and Restart items will not work. Everything else is unaffected."
+fi
+
 mkdir -p /mnt/tub3
 
 systemctl daemon-reload

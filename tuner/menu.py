@@ -365,6 +365,26 @@ def build_root(state: dict) -> Screen:
         Item("Uptime", ItemKind.INFO, state.get("uptime", "3d 04:12")),
     ]
 
+    # Its own screen rather than items on the root, because both of these are one press away
+    # from taking the television away from whoever is watching it, and the root is where a
+    # thumb lands by accident. Two deliberate presses is the right price.
+    #
+    # It also exists for a physical reason: this box lives behind a television, and pulling
+    # power from a running Linux box is how a filesystem gets corrupted. Before this the only
+    # clean shutdown was an ssh session, which is not a thing anyone has to hand while
+    # unplugging a Pi to move it.
+    power = [
+        Item("Shut down", ItemKind.ACTION,
+             action=state.get("_shutdown") or (lambda: "No shutdown handler"),
+             help="Stops everything, then it is safe to unplug"),
+        Item("Restart", ItemKind.ACTION,
+             action=state.get("_reboot") or (lambda: "No restart handler"),
+             help="Reboots the box; television returns on its own"),
+        Item("Restart the tuner", ItemKind.ACTION,
+             action=state.get("_restart_tuner") or (lambda: "No handler"),
+             help="Just the television software, not the whole box"),
+    ]
+
     # The root's way out leaves the menu altogether rather than going up a level, so it says
     # so. "Back" on the top screen would be a lie about where it takes you.
     return Screen("SETUP", [
@@ -372,5 +392,6 @@ def build_root(state: dict) -> Screen:
         Item("AUDIO", ItemKind.SUBMENU, children=audio),
         Item("CHANNELS", ItemKind.SUBMENU, children=channels),
         Item("NETWORK", ItemKind.SUBMENU, children=network),
+        Item("POWER", ItemKind.SUBMENU, children=power),
         Item("ABOUT", ItemKind.SUBMENU, children=about),
     ], exit_label="EXIT TO TV", exit_help="Close the menu and go back to what's on")

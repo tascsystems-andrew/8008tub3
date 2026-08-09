@@ -415,6 +415,39 @@ def main(argv: list[str] | None = None) -> int:
     # Apply the saved value at startup, or the menu would say On over a picture with none.
     player.set_subtitles(state.get("subtitles") == "On")
 
+    def _run_as_root(argv: list[str], saying: str, failed: str) -> str:
+        """Fire a privileged command and report in a sentence the menu can show.
+
+        Detached and never waited on. `systemctl poweroff` takes this very process down with
+        it, so waiting would mean blocking the menu thread on its own execution — and a box
+        that appears to hang when you press Shut down is one nobody presses twice.
+
+        The grant is three exact command lines in /etc/sudoers.d/tub3-power, matched whole.
+        A box that cannot shut itself down is a working television; a box with a general
+        NOPASSWD grant is a different kind of object.
+        """
+        import subprocess  # noqa: PLC0415
+
+        try:
+            subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError as exc:
+            print(f"  power: {argv} failed: {exc}")
+            return failed
+        return saying
+
+    state["_shutdown"] = lambda: _run_as_root(
+        ["sudo", "-n", "/bin/systemctl", "poweroff"],
+        "Shutting down — wait for the light to stop, then unplug",
+        "Could not shut down; use ssh")
+    state["_reboot"] = lambda: _run_as_root(
+        ["sudo", "-n", "/bin/systemctl", "reboot"],
+        "Restarting — the television comes back on its own",
+        "Could not restart; use ssh")
+    state["_restart_tuner"] = lambda: _run_as_root(
+        ["sudo", "-n", "/bin/systemctl", "restart", "tub3-tuner"],
+        "Restarting the tuner",
+        "Could not restart the tuner")
+
     # Come up on the ambiance channel when there is one.
     #
     # It is the only channel that cannot be broken: no schedule, no catalogue, no NAS. A box
@@ -442,10 +475,21 @@ def main(argv: list[str] | None = None) -> int:
         Only ever reached from a physical keypress — see `tub3.cec`, which is emphatic about
         it, and rightly: an appliance that can switch a television on unprompted will
         eventually do it at 3am.
+
+        Logged either way. CEC fails quietly and for reasons nobody can see from the sofa —
+        a soundbar refusing to relay, an adapter that lost its logical address — and "the
+        picture stopped but the television stayed on" is indistinguishable from "the button
+        did nothing" unless something wrote down which half worked.
         """
         from . import cec  # noqa: PLC0415 - keeps CEC out of the import path on a desktop
 
-        cec.tv_on() if on else cec.tv_off()
+        want = "on" if on else "standby"
+        try:
+            ok = cec.tv_on() if on else cec.tv_off()
+        except Exception as exc:  # noqa: BLE001
+            print(f"  cec: {want} raised {exc}")
+            return
+        print(f"  cec: {want} {'sent' if ok else 'FAILED — the set will not have moved'}")
 
     box = Box(lineup, player, start_channel=start, state=state,
               rescan=rescan, power=power)
