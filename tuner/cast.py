@@ -16,8 +16,14 @@ master until it exits. So the tuner has to be out of the way *before* the pipeli
 what makes that possible is that uxplay announces the client during RTSP negotiation — several
 exchanges before any video flows.
 
-    Client identified as User-Agent: AirPlay/xxx     <- a session is starting, yield now
-    TEARDOWN                                          <- it is over, take the screen back
+    ct=2 spf=352 usingScreen=1 ...     <- mirroring is starting, yield the screen now
+    ct=2 spf=352 usingScreen=0 ...     <- audio only; the television keeps its picture
+    TEARDOWN                           <- it is over, take the screen back
+
+**Only mirroring counts.** The obvious trigger is the line where uxplay names the client, and
+that was the first implementation — but it is logged for every session, so AirPlaying a song
+took the television away and left a dead screen behind it. Observed live, on a phone sending a
+YouTube video's audio to the box.
 """
 
 from __future__ import annotations
@@ -29,9 +35,20 @@ from typing import Callable
 
 UNIT = "tub3-airplay"
 
-# Negotiation, not playback. This lands well before the first frame, which is the only reason
-# the handover can be done in time.
-STARTED = re.compile(r"Client identified as User-Agent")
+# `usingScreen=1`, not the user-agent line. Both arrive during negotiation and well before the
+# first frame, but the user-agent line is logged for *every* session including audio-only ones
+# — so watching it meant a phone sending music to the box took the television away and left a
+# dead screen. Observed live: AirPlaying a YouTube video's audio released the picture.
+#
+# uxplay states the distinction outright at setup:
+#
+#     ct=2 spf=352 usingScreen=0 isMedia=1     <- audio only, leave the screen alone
+#     ct=2 spf=352 usingScreen=1 ...           <- mirroring, yield now
+#
+# An audio session therefore changes nothing: the channel keeps playing and the phone's audio
+# is simply refused the device, which is the right failure. Taking a working picture away to
+# play music badly is not.
+STARTED = re.compile(r"usingScreen=1")
 
 # TEARDOWN is the protocol's own goodbye and the one to trust. "Stopping" covers uxplay
 # itself going down — a restart, a crash, the unit being stopped — which leaves the screen
