@@ -97,6 +97,7 @@ class MpvPlayer:
         self._request_id = 0
         self._fullscreen_applied = False
         self._backdrop = False
+        self._splash_dismissed = False
         self.alive = True
 
     # ---------- lifecycle ----------
@@ -395,6 +396,7 @@ class MpvPlayer:
         started = self._wait_for_event("playback-restart", timeout)
         if started:
             self._pace_to_source()
+            self._dismiss_splash()
         latency_ms = (time.perf_counter() - start) * 1000.0
         if not started:
             return TuneResult(False, latency_ms, "no playback-restart event")
@@ -458,6 +460,8 @@ class MpvPlayer:
 
         self._command(["set_property", "pause", False], wait=False)
         started = self._wait_for_event("playback-restart", timeout)
+        if started:
+            self._dismiss_splash()
         latency_ms = (time.perf_counter() - start) * 1000.0
         return TuneResult(started, latency_ms, None if started else "no playback-restart")
 
@@ -488,6 +492,8 @@ class MpvPlayer:
         self._backdrop = True
         self._command(["set_property", "pause", False], wait=False)
         started = self._wait_for_event("playback-restart", timeout)
+        if started:
+            self._dismiss_splash()
         return TuneResult(started, (time.perf_counter() - start) * 1000.0,
                           None if started else "no playback-restart")
 
@@ -514,6 +520,28 @@ class MpvPlayer:
 
     # Above this width, retiming to the display costs more than it buys.
     RESAMPLE_MAX_WIDTH = 2048
+
+    def _dismiss_splash(self) -> None:
+        """Take the boot splash down, now that there is television behind it.
+
+        Plymouth normally quits when boot finishes, which on this box is eleven seconds —
+        and a Samsung Frame spends several of those negotiating HDMI. So the mark was drawn
+        correctly to a screen that was not yet watching, and what the viewer saw was black,
+        then a login prompt, then a programme. Verified by hand: `plymouth show-splash` on a
+        running system puts the mark up perfectly.
+
+        Holding it until the first frame presents is also just the right chain — power, mark,
+        television, with nothing in between. Best effort in every direction: no plymouth, no
+        splash running, or no permission all mean there is simply nothing to take down.
+        """
+        if self._splash_dismissed:
+            return
+        self._splash_dismissed = True
+        try:
+            subprocess.Popen(["plymouth", "quit"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except (OSError, ValueError):
+            pass
 
     def _pace_to_source(self) -> None:
         """Pick a frame-pacing strategy for the file that just started.

@@ -18,6 +18,13 @@
 #   3. Kernel message wall           cmdline.txt     quiet loglevel=0
 #   4. Blinking console cursor       cmdline.txt     vt.global_cursor_default=0
 #   5. systemd/cloud-init chatter    cmdline.txt     console=tty3
+#   6. the login prompt              systemctl       disable getty@tty1
+#
+# (6) is the one that survived every other suppression. `console=tty3` moves the *kernel*
+# console, but systemd still starts a getty on tty1 and draws a login prompt there the moment
+# Plymouth quits. On this box that is what the viewer actually saw: black, a login prompt for
+# about ten seconds, then a programme. Ctrl-Alt-F2 still gets a console, because autovt
+# spawns gettys on the other terminals on demand.
 #
 # (5) is the one people miss. `quiet` suppresses the kernel, not userspace — without moving
 # the console to an unused virtual terminal, service start-up text still scrolls over the
@@ -114,6 +121,13 @@ plymouth-set-default-theme -R "$THEME_NAME"
 
 # ------------------------------------------------------------------ boot flags ---
 say "Silencing the boot chain"
+
+# The login prompt. `console=tty3` moves the kernel console, but systemd still starts a getty
+# on tty1 and draws a login prompt there the moment plymouth quits — which is what a viewer
+# actually saw on this box: black, then a login prompt for about ten seconds, then a
+# programme. Ctrl-Alt-F2 still reaches a console, because autovt spawns gettys on the other
+# terminals on demand, so this costs nothing but the prompt nobody wanted.
+systemctl disable --now getty@tty1.service >/dev/null 2>&1 || true
 
 if ! grep -q '^disable_splash=1' "$CFG"; then
     printf '\n# No firmware rainbow square at power-on.\ndisable_splash=1\n' >> "$CFG"
