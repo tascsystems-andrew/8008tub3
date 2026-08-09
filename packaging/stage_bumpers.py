@@ -63,6 +63,7 @@ NAMES = {
     "Last Laugh.mp4":                   "ch11-a.mp4",
     "Last Laugh 2 bumper.mp4":          "ch11-b.mp4",
     "The Zone.mp4":                     "ch12-a.mp4",
+    "Ch14 Bumper.mp4":                  "ch14-a.mp4",
     "Please Stand By.mp4":              "extra-standby-a.mp4",
 }
 

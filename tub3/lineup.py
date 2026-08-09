@@ -71,6 +71,30 @@ AMBIANCE_CHANNEL = 13
 CHILDRENS_HOURS_START = 6
 CHILDRENS_HOURS_END = 17
 
+# The watershed. Nothing rated above 14A airs before this hour, on any channel, whatever the
+# channel is rated. Andrew's line, 2026-08-09, and his example is the right way to read it:
+# True Lies on a Sunday afternoon is fine, Californication at one o'clock is not.
+#
+# This is deliberately a *global* rule rather than another per-channel setting. The children's
+# hours check above only guards channels rated kids or family, which is why a channel called
+# AFTER DARK could run The Sopranos at nine in the morning without anything objecting -- it is
+# rated `late`, so it was exempt from the only rule there was. A watershed that a channel can
+# opt out of by describing itself as adult is not a watershed.
+WATERSHED_HOUR = 20
+WATERSHED_END = 6
+
+# Above 14A, as Plex reports it. Unrecognised and unrated count as above the line: an
+# allowlist fails closed, and the wild contains regional codes, blanks and typos.
+OVER_14A = frozenset({
+    "tv-ma", "r", "nc-17", "x", "18", "18+", "17+", "16+", "ma15+", "r18+",
+    "nr", "unrated", "not rated", "",
+})
+
+
+def after_watershed(hour: int) -> bool:
+    """Is this hour inside the window where anything may air?"""
+    return hour >= WATERSHED_HOUR or hour < WATERSHED_END
+
 
 # Upstream keys a station config by these exact lowercase names, so this is the wire
 # format rather than a display list. Monday first, which is what makes WEEKDAYS[:5] and
@@ -200,6 +224,25 @@ class Channel:
     # is never silent: every build prints the overrides it honoured, so a decision made once
     # keeps announcing itself instead of decaying into a setting nobody remembers.
     rated_kids: list[str] = field(default_factory=list)
+    # Source paths the owner has judged fine before the watershed, where Plex rates them
+    # above 14A. The ratings this meets are frequently wrong in the cautious direction --
+    # Long Way Round and a motor racing documentary both come back TV-MA -- and the answer to
+    # a wrong rating is a person overruling it by name, not a softer rule.
+    #
+    # Same two properties as `rated_kids`: it cannot match by accident, because the full path
+    # must be written and must already be a source of this channel, and it is never silent.
+    rated_daytime: list[str] = field(default_factory=list)
+    # Folders of commercials that belong to this channel alone, instead of the shared pool
+    # for its rating.
+    #
+    # The shared pools are keyed by rating, which is right for the dial in general — a late
+    # channel should draw on everything a family channel can, plus its own — and wrong the
+    # moment a channel has a *voice*. British ad breaks on a British channel are part of what
+    # makes it that channel; the same clips turning up on Saturday morning cartoons are just
+    # confusing.
+    #
+    # Falls back to the rating pool when empty, so nothing else on the dial changes.
+    commercials: list[str] = field(default_factory=list)
 
     @property
     def station(self) -> str:
@@ -273,6 +316,8 @@ def load(path: Path) -> list[Channel]:
             commercial_free=bool(raw.get("commercial_free", False)),
             interstitials=list(raw.get("interstitials", [])),
             rated_kids=list(raw.get("rated_kids", [])),
+            rated_daytime=list(raw.get("rated_daytime", [])),
+            commercials=list(raw.get("commercials", [])),
         ))
     return sorted(channels, key=lambda c: c.number)
 
@@ -449,10 +494,58 @@ def audit(channels: list[Channel]) -> tuple[list[str], list[str]]:
     except Exception:  # noqa: BLE001 - Plex being unreachable must not disable the guard
         plex_index = {}
 
+    from .plex import lookup as plex_lookup  # noqa: PLC0415
+
     problems: list[str] = []
     # Honoured overrides, returned alongside the refusals so a caller can print them. They
     # are not warnings and not errors — they are decisions, and they get said out loud.
     overrides: list[str] = []
+
+    # The watershed, first and for every channel. Unlike the children's-hours rule below it
+    # does not care what a channel calls itself: a station named AFTER DARK with no dayparts
+    # ran The Sopranos at nine in the morning, and was exempt from the only check there was
+    # precisely because it described itself as adult.
+    for channel in channels:
+        if channel.kind == "guide":
+            continue
+
+        # Which tags touch a daylight hour. A channel with no dayparts runs one tag around
+        # the clock, so all of its sources do.
+        daylight: dict[str, set[int]] = {}
+        if channel.dayparts:
+            for part in channel.dayparts:
+                lit = {h for h in part.hours() if not after_watershed(h)}
+                if lit:
+                    daylight.setdefault(part.tag, set()).update(lit)
+        else:
+            for tag in channel.sources:
+                daylight[tag] = {h for h in range(24) if not after_watershed(h)}
+
+        for tag, hours in daylight.items():
+            for folder in channel.sources.get(tag, []):
+                item = plex_lookup(plex_index, Path(folder)) if plex_index else None
+                if item is None:
+                    # Nothing to judge it by. The children's-hours check below still applies
+                    # on kids and family channels; refusing every unmatched title on every
+                    # channel would empty the dial over a Plex outage.
+                    continue
+                code = (item.content_rating or "").split("/")[-1].strip().lower()
+                if code not in OVER_14A:
+                    continue
+                if folder in channel.rated_daytime:
+                    overrides.append(
+                        f"channel {channel.number} ({channel.name!r}) airs {folder!r} before "
+                        f"the {WATERSHED_HOUR}:00 watershed by explicit override — "
+                        f"Plex rates it {item.content_rating}"
+                    )
+                    continue
+                span = f"{min(hours):02d}:00-{max(hours) + 1:02d}:00"
+                problems.append(
+                    f"channel {channel.number} ({channel.name!r}) airs {folder!r} at {span}, "
+                    f"but Plex rates it {item.content_rating} — nothing above 14A may air "
+                    f"before {WATERSHED_HOUR}:00"
+                )
+
     for channel in channels:
         if channel.rating not in ("kids", "family"):
             continue
@@ -806,7 +899,11 @@ def compile_station(channel: Channel, media_root: Path, *, pools: dict[str, str]
             f"and has no station config. Upstream's network_type 'guide' is Tk-based and "
             f"will not run on a DRM-only box."
         )
-    commercial_tag = pools.get(channel.rating)
+    # A channel with its own commercials uses them and nothing else. Named for the
+    # channel so two stations cannot collide, and built by `apply` like any other pool.
+    commercial_tag = f"ads-ch{channel.number}" if channel.commercials else None
+    if commercial_tag is None:
+        commercial_tag = pools.get(channel.rating)
     if commercial_tag is None:
         # Fall back down the ladder: asking for family on a kids-only library gets kids.
         wanted = RATING_LADDER.index(channel.rating)
@@ -896,6 +993,15 @@ def apply(lineup_path: Path, media_root: Path, ads_root: Path,
         )
 
     pools = build_rating_pools(media_root, ads_root)
+
+    # A channel's own commercials, where it has them. Built exactly like a content pool —
+    # symlinks into a tag directory — because to upstream a commercial folder is just another
+    # directory of clips, and `compile_station` has already pointed the station at this name.
+    for channel in channels:
+        if not channel.commercials:
+            continue
+        count = _link_pool(media_root, f"ads-ch{channel.number}", channel.commercials)
+        print(f"    ch{channel.number} {channel.name}: {count} own commercial(s)")
 
     # A tag can be shared by several channels; build each pool once. Where two channels
     # define the same tag with different exclusions, take the union — excluding more is the
