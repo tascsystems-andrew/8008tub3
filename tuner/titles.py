@@ -40,15 +40,35 @@ NOISE = ("WEBRip", "WEB-DL", "WEBDL", "BluRay", "HDTV", "DVDRip", "PDTV", "AMZN"
          "INTERNAL", "REMUX", "10bit", "HDR", "DoVi")
 
 _cache: dict | None = None
+_cache_stamp: tuple[float, int] | None = None
 
 
 def _load() -> dict:
-    global _cache
-    if _cache is None:
-        try:
-            _cache = json.loads(TITLES.read_text())
-        except (OSError, json.JSONDecodeError):
-            _cache = {}
+    """The map, held in memory but reloaded when the file underneath it changes.
+
+    Held because it is read on every tune and every guide redraw, and re-parsing a few
+    thousand entries at that rate would be absurd. Reloaded because the map is *built while
+    the box is running* — the walk crosses the VPN and takes the better part of an hour — and
+    a cache that never looked again meant new titles appeared only after a restart, which
+    nobody would connect back to the build that had just finished.
+
+    `stat` is a syscall against local disk. Checking costs far less than parsing.
+    """
+    global _cache, _cache_stamp
+    try:
+        info = TITLES.stat()
+        stamp = (info.st_mtime, info.st_size)
+    except OSError:
+        stamp = None
+
+    if _cache is not None and stamp == _cache_stamp:
+        return _cache
+
+    _cache_stamp = stamp
+    try:
+        _cache = json.loads(TITLES.read_text())
+    except (OSError, json.JSONDecodeError):
+        _cache = {}
     return _cache
 
 
