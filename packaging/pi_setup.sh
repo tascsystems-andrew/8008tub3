@@ -45,6 +45,43 @@ sudo -u "$RUN_USER" "$REPO/.venv-build/bin/pip" -q install --upgrade pip
 sudo -u "$RUN_USER" "$REPO/.venv-build/bin/pip" -q install \
     moviepy ffmpeg-python mutagen jsonschema
 
+# yt-dlp: fetching commercials, and playing whatever a phone casts. From PyPI rather than
+# Debian on purpose — YouTube changes things every few weeks and a packaged yt-dlp goes stale
+# between releases. Stale does not degrade here; it stops resolving videos altogether.
+say "Installing yt-dlp"
+sudo -u "$RUN_USER" "$REPO/.venv-build/bin/pip" -q install --upgrade yt-dlp
+
+# A JavaScript runtime, which yt-dlp needs to solve YouTube's signature challenges. Without
+# one it still resolves ordinary videos and fails on anything age-gated or protected — a
+# failure that looks like "that particular video is broken" rather than like a missing
+# dependency, which is the kind that costs an afternoon.
+#
+# Deno rather than Node because it is the only runtime yt-dlp enables by default, so this
+# needs no configuration anywhere else, and because a single static binary suits an appliance
+# better than a package tree. Not packaged for Debian, hence the release download.
+if ! command -v deno >/dev/null 2>&1; then
+    say "Installing Deno (JavaScript runtime for yt-dlp)"
+    DENO_ARCH="$(uname -m)"
+    case "$DENO_ARCH" in
+        aarch64) DENO_ZIP=deno-aarch64-unknown-linux-gnu.zip ;;
+        x86_64)  DENO_ZIP=deno-x86_64-unknown-linux-gnu.zip ;;
+        *)       DENO_ZIP="" ;;
+    esac
+    if [[ -n "$DENO_ZIP" ]]; then
+        apt-get install -y --no-install-recommends unzip curl >/dev/null 2>&1
+        if curl -fsSL -o /tmp/deno.zip \
+            "https://github.com/denoland/deno/releases/latest/download/$DENO_ZIP" \
+            && unzip -oq /tmp/deno.zip -d /tmp; then
+            install -m 0755 /tmp/deno /usr/local/bin/deno
+        else
+            warn "Deno download failed — age-gated YouTube videos will not resolve."
+        fi
+        rm -f /tmp/deno.zip /tmp/deno
+    else
+        warn "No Deno build for $DENO_ARCH — age-gated YouTube videos will not resolve."
+    fi
+fi
+
 if [[ ! -d "$REPO/vendor/FieldStation42" ]]; then
     say "Cloning FieldStation42 at the pinned commit"
     PIN="$(grep -oE '[0-9a-f]{40}' "$REPO/UPSTREAM.md" | head -1)"
