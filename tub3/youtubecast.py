@@ -49,7 +49,8 @@ class CastReceiver:
 
         if self.lounge:
             self.lounge.close()
-        lounge = Lounge(name=self.name, on_video=self.on_video, on_stop=self.on_stop)
+        lounge = Lounge(name=self.name, on_video=self.on_video, on_stop=self.on_stop,
+                        theme=params.get("theme", "cl"))
         self.lounge = lounge
         print(f"  cast: {app} launched, joining session")
         if not lounge.register(code):

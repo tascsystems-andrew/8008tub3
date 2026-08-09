@@ -83,8 +83,14 @@ class Lounge:
 
     def __init__(self, name: str = "BoobTube",
                  on_video: Callable[[str, float], None] | None = None,
-                 on_stop: Callable[[], None] | None = None):
+                 on_stop: Callable[[], None] | None = None,
+                 theme: str = "cl"):
         self.name = name
+        # Carried from the DIAL launch and echoed back on every bind. YouTube checks it and
+        # hangs up on a mismatch — `forceDisconnect: unmatchingTheme` — immediately after
+        # handing out a session id, so the connection *looks* successful and then silently
+        # goes nowhere. That presents at the phone as connecting forever.
+        self.theme = theme
         self.screen_id = screen_id_for(name)
         self.on_video = on_video
         self.on_stop = on_stop
@@ -93,6 +99,10 @@ class Lounge:
         self.gsession: str | None = None
         self.playing: str | None = None
         self._rid = random.randint(10000, 99999)
+        # Outgoing message ordinal. The lounge rejects a command whose offset it has already
+        # seen, so this only ever moves forward.
+        self._ofs = 0
+        self._seen_commands: set[str] = set()
         self._alive = False
 
     # ---------- pairing ----------
@@ -144,9 +154,61 @@ class Lounge:
             "v": "2",
             "RID": str(self._rid),
             "CVER": "1",
+            "theme": self.theme,
             "zx": uuid.uuid4().hex[:12],
             "t": "1",
         }
+
+    def send(self, command: str, payload: dict | None = None) -> bool:
+        """Say something back.
+
+        The lounge is a conversation, not a feed, and missing that is what makes a receiver
+        look connected and never play anything. On joining, YouTube asks `getNowPlaying` and
+        `getDiscoveryDeviceId`; until those are answered it does not consider the screen ready
+        and never sends a video — the phone sits on "connecting" indefinitely.
+
+        Commands go back on the same bind URL as a form post: `req0__sc` names the command and
+        `req0_<field>` carries each argument.
+        """
+        if not self.sid:
+            return False
+        self._rid += 1
+        params = self._bind_params()
+        params.update({"SID": self.sid, "gsessionid": self.gsession or "",
+                       "RID": str(self._rid), "AID": "0"})
+        fields = {"count": "1", "ofs": str(self._ofs), "req0__sc": command}
+        for key, value in (payload or {}).items():
+            fields[f"req0_{key}"] = str(value)
+        self._ofs += 1
+        try:
+            _post(f"{BIND}?{urllib.parse.urlencode(params)}", fields)
+        except (urllib.error.HTTPError, OSError) as exc:
+            print(f"  lounge: could not send {command} ({exc})")
+            return False
+        return True
+
+    # Player states the lounge understands. -1 is the one that matters on joining: it means
+    # "a screen is here and has nothing loaded", which is what invites a video.
+    STOPPED, PLAYING = "-1", "1"
+
+    def _report_state(self) -> None:
+        """What this screen is doing, in the shape the lounge expects.
+
+        Every field, not the obvious four. A partial answer is accepted and then ignored: the
+        session stays open, the phone shows "connecting", and nothing is ever sent. Working
+        receivers reply with the whole set, so this does too.
+        """
+        playing = bool(self.playing)
+        self.send("nowPlaying", {
+            "videoId": self.playing or "",
+            "currentTime": "0.000",
+            "duration": "0.000",
+            "seekableStartTime": "0.000",
+            "seekableEndTime": "0.000",
+            "currentIndex": "0" if playing else "-1",
+            "listId": "",
+            "state": self.PLAYING if playing else self.STOPPED,
+        })
 
     @staticmethod
     def frames(body: str) -> Iterator[list]:
@@ -195,6 +257,29 @@ class Lounge:
                     self.playing = video
                     if self.on_video:
                         self.on_video(video, position)
+            elif name == "getNowPlaying":
+                self._report_state()
+            elif name == "getDiscoveryDeviceId":
+                self.send("discoveryDeviceId", {"deviceId": self.screen_id[:32]})
+            elif name not in ("nowPlaying", "setPlaylist", "onStateChange",
+                              "getNowPlaying", "getDiscoveryDeviceId"):
+                # Everything the lounge says that this does not act on. Printed once each,
+                # because the reason casting sat at "connecting" was a command nobody had
+                # looked at — and guessing the protocol from documentation was what produced
+                # a receive-only client in the first place.
+                if name not in self._seen_commands:
+                    self._seen_commands.add(name)
+                    detail = str(payload)[:110] if payload else ""
+                    print(f"  lounge: <- {name} {detail}")
+            elif name == "forceDisconnect":
+                reason = payload.get("reason", "unknown")
+                print(f"  lounge: YouTube refused the session ({reason})")
+                self.sid = None
+            elif name in ("remoteConnected", "remoteDisconnected", "loungeStatus",
+                          "loungeScreenConnected", "onAutoplayModeChanged",
+                          "autoplayUpNext", "playlistModified", "onSubtitlesTrackChanged",
+                          "onAutoplayDismissed", "onVolumeChanged", "c", "S", "noop"):
+                pass          # known and uninteresting
             elif name in ("onStop", "stopVideo"):
                 self.playing = None
                 if self.on_stop:
@@ -211,6 +296,10 @@ class Lounge:
             return False
         for frame in self.frames(body):
             self._handle(frame)
+        if self.sid:
+            # Volunteered, not waited for. The lounge asks `getNowPlaying` on joining, but
+            # saying it unprompted costs one request and removes an ordering assumption.
+            self._report_state()
         return self.sid is not None
 
     def _poll_once(self, timeout: float = 45.0) -> bool:
