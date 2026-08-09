@@ -23,7 +23,13 @@ User=andrew
 #
 # kmssink because this box has no compositor — mpv draws straight to DRM and so must uxplay.
 # The two cannot both hold DRM master, which is what the tuner's handover exists to resolve.
-ExecStart=/usr/bin/uxplay -n BoobTube -nohold -vs kmssink -as alsasink
+#
+# `stdbuf -oL` is load-bearing, not tidiness. uxplay writes with ordinary stdio, which is
+# line-buffered on a terminal and block-buffered on a pipe — and under systemd stdout *is* a
+# pipe. Without this the journal stays empty until four kilobytes accumulate, so the startup
+# banner never appears, a connection attempt looks identical to nothing happening, and the
+# tuner's watcher never sees the line it exists to wait for. The feature cannot work.
+ExecStart=/usr/bin/stdbuf -oL -eL /usr/bin/uxplay -n BoobTube -nohold -vs kmssink -as alsasink
 Restart=always
 RestartSec=3
 # Line-buffered, so the tuner's watcher sees "Client identified as User-Agent" the moment it
