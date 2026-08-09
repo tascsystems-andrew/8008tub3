@@ -88,6 +88,10 @@ class PlexEpisode:
     season: int | None
     episode: int | None
     path: str = ""
+    # Seconds, as Plex measured them when it scanned the file. Carried here because it is
+    # free — the same response already contains it — and because probing for it later is the
+    # most expensive single thing a schedule build does.
+    seconds: float = 0.0
 
 
 class PlexError(RuntimeError):
@@ -246,6 +250,10 @@ class Plex:
             title = node.get("title") or ""
             season = node.get("parentIndex")
             number = node.get("index")
+            # Milliseconds on the Video node, which is where Plex puts the authoritative
+            # length; the Media node repeats it but is absent on some items.
+            millis = node.get("duration")
+            seconds = float(millis) / 1000.0 if (millis or "").isdigit() else 0.0
             for media in node.findall("Media"):
                 for part in media.findall("Part"):
                     path = part.get("file")
@@ -257,6 +265,7 @@ class Plex:
                         season=int(season) if (season or "").isdigit() else None,
                         episode=int(number) if (number or "").isdigit() else None,
                         path=path,
+                        seconds=seconds,
                     ))
         return out
 
