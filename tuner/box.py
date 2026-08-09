@@ -13,9 +13,15 @@ BACK is a shortcut everywhere it appears, never a requirement. No clicker has a 
 labelled anything like it — on the Elan it is the long-press of the down arrow — so every
 menu screen carries its own `Back` item and the whole tree is navigable with three verbs.
 
-There is no spinner and no "loading" state anywhere. Measured channel change is ~17ms median
-and 50ms worst through real mpv, so there is nothing to hide — the correct design is to show
-nothing at all rather than a progress indicator that flashes for one frame.
+There is no spinner and no "loading" state anywhere, but there is a deliberate split between
+*answering the button* and *changing the picture*. The number goes up the instant a button is
+pressed, on the outgoing channel's picture, and the file opens afterwards. That is what a
+television did, and it is why changing channel felt immediate on hardware far slower than
+this. A box that shows nothing until the picture is ready feels broken at any speed.
+
+The tune itself is deferred by `Box.SETTLE` after the last press, because the interaction
+being designed for is rapid-fire clicks — clack-clack-clack up the dial — and every channel
+passed through at speed is a file nobody is going to watch.
 """
 
 from __future__ import annotations
@@ -88,6 +94,32 @@ def render_bug(airing: Airing) -> str:
     return channel + "\n" + info
 
 
+def render_tuning(label: str, name: str = "") -> str:
+    """The half of the bug that needs no disk: the number, and the network if we know it.
+
+    Drawn the instant a button is pressed, before anything is opened. Both blocks sit exactly
+    where `render_bug` puts them, so when the programme details arrive they fill in underneath
+    rather than shifting what is already on screen.
+
+    `label` is passed in rather than formatted from a number because it also carries the
+    half-typed case — `CH 1_` while the box waits to find out whether that meant 1 or 12.
+    """
+    channel = (
+        r"{\an9\pos(1840,54)\fnmonospace\fs150\b1\bord0\shad6"
+        r"\1c&H55FF33&\4c&H000000&}"
+        f"{label}"
+    )
+    if not name:
+        return channel
+
+    info = (
+        r"{\an3\pos(1840,1020)\fnmonospace\fs34\bord0\shad3"
+        r"\1c&H55FF33&\4c&H000000&}"
+        f"{{\\b1}}{name}{{\\b0}}"
+    )
+    return channel + "\n" + info
+
+
 class Box:
     def __init__(
         self,
@@ -114,13 +146,63 @@ class Box:
         self._guide_ass = None
         self._guide_pushed_at = 0.0
         self._looping = False
+        # What mpv actually has open, as opposed to where the viewer thinks they are. The two
+        # differ for as long as a settle window, and after a burst they may turn out to agree
+        # — up then down again is a change of mind, not a channel change.
+        self._on_air: int | None = None
+        self._settle_at = 0.0
+        self._tune_seq = 0
+        self._tuning = ""
+        self._tuning_name = ""
 
     # How long a set of listings rows stays good for. Rebuilding them queries every channel's
     # schedule across ninety minutes; the scroll is redrawn far more often than this, because
     # that part is arithmetic.
     GUIDE_ROWS_TTL = 20.0
 
+    # How long the box waits after the last press before it opens anything. Long enough to
+    # swallow a burst of clicks at the speed a child produces them, short enough that a single
+    # press is not perceptibly deferred — and the number is already on screen throughout, so
+    # this window costs nothing anybody can see.
+    SETTLE = 0.22
+
+    # How long a partial channel number waits for a second digit. Only ever paid by a prefix
+    # of a longer channel: with 2-13 on the dial, `7` can only mean 7 and commits at once.
+    DIGIT_WAIT = 1.0
+
+    # Two clocks. The settle timer needs fine resolution or the deferral meant to remove the
+    # drag becomes the drag; everything else in the loop talks to mpv over IPC and must not
+    # run at that rate — flooding that socket is what took the tuner down once already.
+    TICK = 0.05
+    HOUSEKEEPING = 0.25
+
     # ---------- tuning ----------
+
+    def select(self, channel: int) -> None:
+        """A viewer changing channel. Feedback now, television shortly.
+
+        Everything here is arithmetic and one overlay write, so it returns in well under a
+        millisecond and can be called as fast as a thumb can move. The file is opened later,
+        by the run loop, once `SETTLE` has passed with no further press.
+
+        Two things fall out of that, and the second is the one that makes it feel right:
+
+        - Eight presses up the dial open one file instead of eight. The box stops loading
+          channels nobody is stopping on.
+        - The number on screen keeps up with the button. The tuner obviously cannot, and the
+          whole trick of a dial that feels fast is that the display never admits it.
+
+        Called for every deliberate change — surfing and direct entry both. Not called when
+        the schedule steps to the next programme, which is not a channel change and must not
+        pay a settle.
+        """
+        station = self.lineup.get(channel)
+        self.channel = channel
+        self._settle_at = time.monotonic() + self.SETTLE
+        self._tune_seq += 1
+        self._tuning = f"CH {channel:02d}"
+        self._tuning_name = getattr(station, "name", "") if station else ""
+        self._redraw()
 
     def tune(self, channel: int, *, announce: bool = True) -> None:
         """Put a channel on screen.
@@ -130,7 +212,11 @@ class Box:
         on the channel they are already watching does not — that is the same channel it was
         a moment ago, and saying so every time a programme starts is the box talking to
         itself. Nothing in the schedule is a channel change.
+
+        This is the slow half — it opens a file — so it runs on the run loop's thread and
+        never under the lock. `select` is what input calls.
         """
+        seq = self._tune_seq
         station = self.lineup.get(channel)
         if getattr(station, "is_guide", False):
             self._tune_guide(channel, announce=announce)
@@ -159,7 +245,12 @@ class Box:
         if airing is None or airing.off_air:
             # Dead air. A real station showed a sign-off card rather than a black screen.
             self.channel = channel
+            self._on_air = channel
+            self._tuning = ""
             self.bug = BugState()
+            # The card is the whole screen, so the tuning number has to come down with it —
+            # otherwise the last thing drawn before the card is left sitting on top of it.
+            self.player.hide_overlay(overlay_id=3)
             self.player.show_overlay(
                 r"{\an5\pos(960,540)\fnmonospace\fs42\1c&H55FF33&}"
                 f"CHANNEL {channel}\\NOFF AIR", overlay_id=2,
@@ -173,7 +264,15 @@ class Box:
         result = self.player.tune(airing.program.path, airing.seek,
                                   duration=airing.program.duration)
         self.last_latency_ms = result.latency_ms
+        self._on_air = channel
+        if seq != self._tune_seq:
+            # A press landed while the file was opening, and it owns the screen now — its own
+            # tune is already queued behind this one. Writing this channel's bug here would put
+            # the wrong number up for a fifth of a second, which is worse than the drag it was
+            # meant to cure.
+            return
         self.channel = channel
+        self._tuning = ""
         # Not announcing: keep the old timestamp so the bug stays however faded it already
         # was, rather than resetting its clock. Carrying the *airing* forward still matters,
         # because a BACK press must describe what is on now, not what was on before.
@@ -200,7 +299,10 @@ class Box:
         if not clips:
             # Configured but empty — say so rather than showing black and looking broken.
             self.channel = channel
+            self._on_air = channel
+            self._tuning = ""
             self.bug = BugState()
+            self.player.hide_overlay(overlay_id=3)
             self.player.show_overlay(
                 r"{\an5\pos(960,540)\fnmonospace\fs42\1c&H55FF33&}"
                 f"CHANNEL {channel}\\NNOTHING LOADED", overlay_id=2,
@@ -211,6 +313,8 @@ class Box:
         self.player.play_loop(clips)
         self._looping = True
         self.channel = channel
+        self._on_air = channel
+        self._tuning = ""
         shown_at = time.monotonic() if announce else self.bug.shown_at
         self.bug = BugState(airing=airing, shown_at=shown_at)
         self._redraw()
@@ -237,6 +341,8 @@ class Box:
             self.player.show_backdrop()
         self._looping = True
         self.channel = channel
+        self._on_air = channel
+        self._tuning = ""
         self.bug = BugState()
         self._guide = Guide(guide_channel=channel,
                             network=getattr(station, "name", "BOOBTUBE"))
@@ -288,7 +394,42 @@ class Box:
         self.player.show_overlay(ass, overlay_id=4)
 
     def surf(self, delta: int) -> None:
-        self.tune(self.lineup.surf(self.channel, delta))
+        self.select(self.lineup.surf(self.channel, delta))
+
+    def _reannounce(self, channel: int) -> None:
+        """The burst ended on the channel already showing. Nothing to open — just say so.
+
+        More common than it sounds: up then down again inside one settle window, or a digit
+        for the channel already on. Re-opening the file would re-seek and restart the
+        programme, a visible glitch bought in exchange for nothing.
+        """
+        self._tuning = ""
+        if self._guide is not None:
+            self.player.hide_overlay(overlay_id=3)
+            self._redraw_guide()
+            return
+
+        airing = self.lineup.now(channel, time.time())
+        if airing is None or airing.off_air:
+            self._redraw()
+            return
+        self.bug = BugState(airing=airing, shown_at=time.monotonic())
+        self._redraw()
+
+    def _digits_are_final(self) -> bool:
+        """True when no channel on the dial extends what has been typed.
+
+        The 1.5s wait for a second digit used to be paid by every direct entry, and it is the
+        single largest component of the measured latency — larger than opening the file. With
+        2-13 on the dial only `1` is a prefix of anything, so only `1` should wait.
+        """
+        typed = self._pending_digits
+        if not typed:
+            return False
+        return not any(
+            len(str(number)) > len(typed) and str(number).startswith(typed)
+            for number in self.lineup.numbers
+        )
 
     def _commit_digits(self) -> None:
         if not self._pending_digits:
@@ -299,7 +440,12 @@ class Box:
             channel = self.channel
         self._pending_digits = ""
         if self.lineup.get(channel):
-            self.tune(channel)
+            self.select(channel)
+        else:
+            # Nothing on that number. Drop the half-drawn entry rather than leaving `CH 9_`
+            # sitting on the picture waiting for a digit that will not help.
+            self._tuning = ""
+            self._redraw()
 
     # ---------- drawing ----------
 
@@ -308,6 +454,13 @@ class Box:
             self.player.show_overlay(self.menu.render_ass(), overlay_id=1)
             return
         self.player.hide_overlay(overlay_id=1)
+        if self._tuning:
+            # A change is in flight — either settling, or waiting on a second digit. This is
+            # the only thing on screen that is guaranteed to be true right now, so it wins
+            # over both the old channel's bug and the listings.
+            self.player.show_overlay(
+                render_tuning(self._tuning, self._tuning_name), overlay_id=3)
+            return
         if self._guide is not None:
             # The listings are the picture on this channel; the bug would be furniture on top
             # of furniture. Repaint them, since leaving the menu just wiped the frame.
@@ -326,7 +479,14 @@ class Box:
                 # Direct channel entry, where the remote has digits. Never required — the
                 # same channels are all reachable with up and down alone.
                 self._pending_digits += str(event.digit)
-                self._digit_deadline = time.monotonic() + 1.5
+                if self._digits_are_final():
+                    self._commit_digits()
+                    return
+                # Genuinely ambiguous, so show the entry rather than nothing: `CH 1_` is a
+                # box waiting for you, where a blank screen is a box ignoring you.
+                self._digit_deadline = time.monotonic() + self.DIGIT_WAIT
+                self._tuning = f"CH {self._pending_digits:_<2}"
+                self._tuning_name = ""
                 self._redraw()
                 return
 
@@ -379,29 +539,52 @@ class Box:
         for driver in drivers:
             threading.Thread(target=self._pump, args=(driver,), daemon=True).start()
 
+        housekept_at = 0.0
         try:
             while self.running:
-                time.sleep(0.25)
+                time.sleep(self.TICK)
                 if not self.player.alive:
                     # mpv exited — usually because the viewer quit. Ending the loop here is
                     # the difference between a clean shutdown and a broken-pipe traceback.
                     self.running = False
                     break
+
+                now = time.monotonic()
+                due: int | None = None
                 with self._lock:
-                    if self._pending_digits and time.monotonic() > self._digit_deadline:
+                    if self._pending_digits and now > self._digit_deadline:
                         self._commit_digits()
+                    if self._settle_at and now >= self._settle_at:
+                        self._settle_at = 0.0
+                        due = self.channel
+
+                # Deliberately outside the lock. This opens a file, which is the one genuinely
+                # slow thing the box does, and holding the lock across it would make every
+                # press arriving during a tune wait for it — which is the drag being removed.
+                if due is not None:
+                    if due == self._on_air:
+                        self._reannounce(due)
+                    else:
+                        self.tune(due)
+                    continue
+
+                if now - housekept_at < self.HOUSEKEEPING:
+                    continue
+                housekept_at = now
+
+                with self._lock:
                     # The bug fades on its own; redraw only on the transition.
                     if self.mode is Mode.WATCH and not self.bug.visible and self.bug.airing:
                         self.bug.airing = None
                         self._redraw()
                     if self._guide is not None:
-                        # The listings scroll, so this one *does* redraw every tick — 4 Hz
+                        # The listings scroll, so this one *does* redraw every pass — 4 Hz
                         # against 22 px/sec is about five pixels a step, which reads as
                         # motion rather than as stepping. The menu still wins the screen.
                         if self.mode is Mode.WATCH:
                             self._redraw_guide()
                         continue
-                    self._advance_if_ended()
+                self._advance_if_ended()
         except KeyboardInterrupt:
             self.running = False
 
@@ -417,6 +600,11 @@ class Box:
         plan is exhausted, or the box was asleep, the right answer is still "what should be
         airing right now".
         """
+        # A channel change is already in flight. Advancing here would open a file on the
+        # channel being left, and its bug would stamp over the number the viewer is watching
+        # for — all to finish a programme nobody is going to see the end of.
+        if self._settle_at or self._tuning:
+            return
         if self.mode is Mode.MENU or not self.player.get_property("idle-active"):
             return
 
