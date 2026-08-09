@@ -699,7 +699,9 @@ class Box:
                 self.surf(-1)
             elif event.verb is Verb.SELECT:
                 self.mode = Mode.MENU
-                self.menu.visible = True
+                # `open`, not `visible = True`: it resets to the root and rests the cursor on
+                # the way out, so pressing the menu button twice closes it again.
+                self.menu.open()
                 self._redraw()
             elif event.verb is Verb.BACK:
                 # Re-show the bug. On a four-button remote this is the "what am I watching"
