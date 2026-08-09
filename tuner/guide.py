@@ -46,7 +46,10 @@ AUDIO_SUFFIXES = {".mp3", ".m4a", ".flac", ".ogg", ".opus", ".wav", ".aac", ".wm
 
 # Layout, in the 1920x1080 space the overlay declares.
 ROW_H = 96
-HEADER_H = 210
+# Deeper than the header's contents strictly need, so the grid does not crowd the clock and
+# there is a clear band for rows to scroll up behind. The header is drawn last and is opaque,
+# which is what hides them as they leave.
+HEADER_H = 300
 LEFT_W = 300              # the channel column
 COL_W = 490               # each half-hour
 COLUMNS = 3               # 90 minutes
@@ -235,21 +238,38 @@ class Guide:
         self.network = network
         self._started = time.time()
 
+    # How many seconds of motion one pushed frame describes.
+    #
+    # The listings always scroll — it is most of what makes this read as a cable box rather
+    # than a table — and a naive implementation redraws to move, which is what filled mpv's
+    # IPC socket and crashed the tuner. libass can animate on its own: `\move` takes a start
+    # and end position and interpolates between them, so one push describes the next few
+    # seconds and nothing is sent in between. Five seconds at 22px/sec is 110px of travel per
+    # frame, and 0.2 pushes a second against the 4 that broke it.
+    WINDOW = 5.0
+
     # -- drawing helpers ---------------------------------------------------------
     @staticmethod
-    def _rect(x1, y1, x2, y2, colour, alpha="&H00&") -> str:
-        return (f"{{\\an7\\pos(0,0)\\bord0\\shad0\\1c{colour}\\1a{alpha}\\p1}}"
+    def _rect(x1, y1, x2, y2, colour, alpha="&H00&", dy=0.0, dur=0) -> str:
+        # Drawing coordinates are absolute and the *origin* is what moves, so a scrolling
+        # rectangle needs no change to its own geometry — only its anchor animates.
+        anchor = (f"\\move(0,0,0,{-int(dy)},0,{int(dur)})" if dur else "\\pos(0,0)")
+        return (f"{{\\an7{anchor}\\bord0\\shad0\\1c{colour}\\1a{alpha}\\p1}}"
                 f"m {int(x1)} {int(y1)} l {int(x2)} {int(y1)} "
                 f"l {int(x2)} {int(y2)} l {int(x1)} {int(y2)}{{\\p0}}")
 
     @staticmethod
-    def _text(x, y, body, *, size, align=4, colour=WHITE, bold=0) -> str:
+    def _text(x, y, body, *, size, align=4, colour=WHITE, bold=0, dy=0.0, dur=0) -> str:
         safe = str(body).replace("{", "(").replace("}", ")").replace("\\", "/")
-        return (f"{{\\an{align}\\pos({int(x)},{int(y)})\\fnMonospace\\fs{size}\\b{bold}"
+        anchor = (f"\\move({int(x)},{int(y)},{int(x)},{int(y - dy)},0,{int(dur)})"
+                  if dur else f"\\pos({int(x)},{int(y)})")
+        return (f"{{\\an{align}{anchor}\\fnMonospace\\fs{size}\\b{bold}"
                 f"\\bord0\\shad2\\4c&H000000&\\1c{colour}}}{safe}")
 
-    def render_ass(self, rows: list[Row], now: float | None = None) -> str:
+    def render_ass(self, rows: list[Row], now: float | None = None,
+                   window_secs: float | None = None) -> str:
         now = time.time() if now is None else now
+        window_secs = self.WINDOW if window_secs is None else window_secs
         width, height = self.RES
         begin, _ = window(now)
         events: list[str] = []
@@ -261,47 +281,55 @@ class Guide:
         visible_h = height - HEADER_H
         total_h = max(1, len(rows) * ROW_H)
 
-        # Only scroll when the dial does not fit. Eleven channels at 96px sit inside 870px of
-        # screen with room to spare, so scrolling a list that is entirely visible is motion
-        # for its own sake — and it is expensive motion: a moving guide has to be redrawn
-        # continuously, and each redraw is five kilobytes of ASS down mpv's IPC socket. At
-        # four a second that filled the socket buffer, blocked the write, and took the whole
-        # tuner down with a timeout. A static guide is pushed once and then left alone.
-        self.scrolling = total_h > visible_h
-        offset = (((now - self._started) * SCROLL_PX_PER_SEC) % total_h
-                  if self.scrolling else 0.0)
+        # Always scrolling. It is the thing that makes this read as a cable box rather than a
+        # printed schedule, and it should not wait for the dial to fill up before it moves.
+        #
+        # The earlier version only scrolled when the rows overflowed, because scrolling meant
+        # redrawing four times a second and that flooded mpv's IPC socket badly enough to take
+        # the tuner down. That was the wrong fix for the right problem: `\move` hands the
+        # animation to libass, so the frequency of pushes is now unrelated to the smoothness
+        # of the motion.
+        self.scrolling = True
+        offset = ((now - self._started) * SCROLL_PX_PER_SEC) % total_h
+        travel = SCROLL_PX_PER_SEC * window_secs
+        duration = int(window_secs * 1000)
 
-        # Drawn twice when scrolling, so the wrap never shows a seam; once when it does not.
-        for repeat in ((0, 1) if self.scrolling else (0,)):
+        # Enough copies of the list to keep the screen covered for the whole window, including
+        # the rows that will scroll up into view from below during it.
+        copies = int((height + travel) // total_h) + 2
+        for repeat in range(copies):
             for index, row in enumerate(rows):
                 y = HEADER_H + index * ROW_H - offset + repeat * total_h
-                if y < HEADER_H - ROW_H or y > height:
+                # Skip only what is off-screen for the entire window: already above the
+                # header at the start, or still below the bottom edge at the end.
+                if y + ROW_H < HEADER_H or y - travel > height:
                     continue
-                events += self._row(row, y, begin)
+                events += self._row(row, y, begin, travel, duration)
 
         events += self._header(now, begin)
         return "\n".join(events)
 
-    def _row(self, row: Row, y: float, begin: float) -> list[str]:
+    def _row(self, row: Row, y: float, begin: float,
+             dy: float = 0.0, dur: int = 0) -> list[str]:
         events = []
         band = PANEL if row.number % 2 == 0 else "&H171310&"
-        events.append(self._rect(0, y, self.RES[0], y + ROW_H - 4, band))
+        events.append(self._rect(0, y, self.RES[0], y + ROW_H - 4, band, dy=dy, dur=dur))
 
         # Channel number and name, in the fixed left column.
-        events.append(self._rect(0, y, LEFT_W - 6, y + ROW_H - 4, "&H2A2118&"))
+        events.append(self._rect(0, y, LEFT_W - 6, y + ROW_H - 4, "&H2A2118&", dy=dy, dur=dur))
         events.append(self._text(24, y + ROW_H / 2 - 14, f"{row.number}",
-                                 size=44, colour=GOLD, bold=1))
+                                 size=44, colour=GOLD, bold=1, dy=dy, dur=dur))
         events.append(self._text(96, y + ROW_H / 2 - 12, row.name[:16],
-                                 size=28, colour=PHOSPHOR))
+                                 size=28, colour=PHOSPHOR, dy=dy, dur=dur))
 
         if row.number == self.guide_channel:
             events.append(self._text(LEFT_W + 20, y + ROW_H / 2 - 12,
-                                     "You are here", size=28, colour=DIM))
+                                     "You are here", size=28, colour=DIM, dy=dy, dur=dur))
             return events
 
         if not row.slots:
             events.append(self._text(LEFT_W + 20, y + ROW_H / 2 - 12,
-                                     "Off air", size=28, colour=DIM))
+                                     "Off air", size=28, colour=DIM, dy=dy, dur=dur))
             return events
 
         for slot in row.slots:
@@ -311,14 +339,14 @@ class Guide:
             x2 = min(LEFT_W + COLUMNS * COL_W, x2)
             if x2 - x1 < 40:
                 continue
-            events.append(self._rect(x1 + 3, y + 6, x2 - 3, y + ROW_H - 10, "&H241E1A&"))
+            events.append(self._rect(x1 + 3, y + 6, x2 - 3, y + ROW_H - 10, "&H241E1A&", dy=dy, dur=dur))
             # A programme already running when the window opens keeps its title, marked
             # with a leading arrow — a blank cell on the channel you are watching is the
             # one thing a guide must never show.
             label = ("< " if slot.clipped(begin) else "") + slot.title
             room = int((x2 - x1 - 26) / 15)          # monospace at size 26
             events.append(self._text(x1 + 16, y + ROW_H / 2 - 12, label[:max(4, room)],
-                                     size=26, colour=WHITE))
+                                     size=26, colour=WHITE, dy=dy, dur=dur))
         return events
 
     def _header(self, now: float, begin: float) -> list[str]:

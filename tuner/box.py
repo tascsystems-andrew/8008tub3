@@ -112,6 +112,7 @@ class Box:
         self._guide_rows: list = []
         self._guide_rows_at = 0.0
         self._guide_ass = None
+        self._guide_pushed_at = 0.0
         self._looping = False
 
     # How long a set of listings rows stays good for. Rebuilding them queries every channel's
@@ -242,6 +243,7 @@ class Box:
         self._guide_rows = []
         self._guide_rows_at = 0.0
         self._guide_ass = None
+        self._guide_pushed_at = 0.0
         self._redraw_guide()
 
     def _redraw_guide(self) -> None:
@@ -271,13 +273,18 @@ class Box:
         except Exception:  # noqa: BLE001 - a listings glitch must not take the box down
             return
 
-        # Only push when the picture actually changed. A static guide changes once a minute,
-        # when the clock does; pushing it four times a second regardless is five kilobytes an
-        # update down a socket nobody is draining, which is what filled mpv's buffer and
-        # crashed the tuner.
-        if ass == self._guide_ass:
+        # Pushed on the animation's own clock, not the tick. Each frame carries `\move` tags
+        # describing the next `Guide.WINDOW` seconds, so libass keeps the grid moving between
+        # pushes and there is nothing to gain from sending more often — which is the whole
+        # reason the listings can scroll continuously without refilling mpv's IPC buffer.
+        #
+        # Sent slightly before the window expires so the next frame is in place before the
+        # last one finishes, otherwise the scroll stalls for a tick at every boundary.
+        due = now - self._guide_pushed_at >= self._guide.WINDOW * 0.9
+        if not due and ass == self._guide_ass:
             return
         self._guide_ass = ass
+        self._guide_pushed_at = now
         self.player.show_overlay(ass, overlay_id=4)
 
     def surf(self, delta: int) -> None:
