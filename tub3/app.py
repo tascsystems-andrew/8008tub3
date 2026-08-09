@@ -141,7 +141,24 @@ def build_drivers(player: MpvPlayer, *, headless: bool) -> list[Driver]:
 
     cec = CecDriver()
     if cec.available():
-        drivers.append(cec)
+        # Claim a logical address before monitoring. Without one the adapter can watch the bus
+        # but is not *on* it: the television has nobody to address, so it never sends us a key
+        # press, and we cannot transmit a standby either. `cec-ctl --playback` claims it and it
+        # survives until reboot — which is precisely why nothing noticed it was missing. The
+        # claim lived only in `tub3.cectest`, run by hand during bring-up, so CEC worked on the
+        # afternoon it was tested and was silently dead after every reboot since.
+        #
+        # Failure is not fatal. A television with CEC switched off, or an AVR in the chain
+        # refusing to relay, both land here, and the clicker still drives everything.
+        from .cectest import ensure_configured  # noqa: PLC0415
+
+        try:
+            claimed, note = ensure_configured()
+        except Exception as exc:  # noqa: BLE001
+            claimed, note = False, str(exc)
+        print(f"  cec: {note}")
+        if claimed:
+            drivers.append(cec)
 
     if headless:
         # Linux appliance: read the input devices directly, so the remote works with no X
@@ -419,7 +436,19 @@ def main(argv: list[str] | None = None) -> int:
         return [LiquidChannel(number, name, args.db, name)
                 for number, name in discover_channels(args.db)]
 
-    box = Box(lineup, player, start_channel=start, state=state, rescan=rescan)
+    def power(on: bool) -> None:
+        """Standby, at the television rather than at the Pi.
+
+        Only ever reached from a physical keypress — see `tub3.cec`, which is emphatic about
+        it, and rightly: an appliance that can switch a television on unprompted will
+        eventually do it at 3am.
+        """
+        from . import cec  # noqa: PLC0415 - keeps CEC out of the import path on a desktop
+
+        cec.tv_on() if on else cec.tv_off()
+
+    box = Box(lineup, player, start_channel=start, state=state,
+              rescan=rescan, power=power)
     try:
         box.run(drivers)
     except KeyboardInterrupt:
