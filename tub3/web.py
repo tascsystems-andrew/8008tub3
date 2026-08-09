@@ -383,6 +383,21 @@ PAGE = """<!doctype html>
  button.ghost{background:transparent;color:var(--amber);border:1px solid var(--line)}
  .ch{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--line);font-size:14px}
  .ch:last-child{border:0}
+ /* The guide grid. Positioned by time rather than laid out in cells, because a programme
+    is a span and not a slot — a 95-minute film has to be able to sit across two columns. */
+ .gwrap{overflow-x:auto;margin:0 -4px}
+ table.guide{border-collapse:collapse;width:100%;min-width:640px}
+ table.guide th{position:sticky;top:0;background:var(--line);color:var(--dim);
+   font:11px ui-monospace,monospace;text-align:left;padding:5px 8px;font-weight:600}
+ table.guide td.chn{width:150px;padding:7px 8px 7px 0;font-size:13px;white-space:nowrap;
+   border-top:1px solid var(--line);vertical-align:middle}
+ table.guide td.chn b{color:var(--accent);margin-right:7px}
+ table.guide td.slots{padding:0;border-top:1px solid var(--line);height:44px}
+ .track{position:relative;height:100%}
+ .blk{position:absolute;top:4px;bottom:4px;background:var(--line);border-left:2px solid var(--accent);
+   padding:5px 7px;font-size:12px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+ .blk.live{background:#2c3550;color:#fff}
+ .nowbar{position:absolute;top:0;bottom:0;width:2px;background:#7ee787;opacity:.85}
  .tag{font:11px ui-monospace,monospace;color:var(--dim)}
  .warn{color:#ffb454}
  .ok{color:var(--amber)}
@@ -440,8 +455,9 @@ PAGE = """<!doctype html>
  </div>
 
  <div class=card>
-  <h2>On now</h2>
-  <div id=channels>Loading…</div>
+  <h2>Guide</h2>
+  <div class=gwrap><table class=guide id=guide></table></div>
+  <div class=hint id=guidefoot>Loading…</div>
  </div>
 
  <div class=card>
@@ -545,16 +561,52 @@ PAGE = """<!doctype html>
 <script>
 const $=s=>document.querySelector(s);
 let LOADS={};
+let HOURS={};
+
+const COLS=6;                       // half-hour columns, three hours across
+const hhmm=t=>new Date(t*1000).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
+
+async function drawGuide(){
+  let g;
+  try{ g = await (await fetch('/api/guide')).json(); }
+  catch(e){ $('#guidefoot').textContent='could not read the schedule'; return; }
+  if(!g.rows || !g.rows.length){
+    $('#guide').innerHTML='';
+    $('#guidefoot').textContent='No channels yet — set your folders below, then Rebuild.';
+    return;
+  }
+  const span = g.end - g.begin;
+  let html = '<tr><th></th>';
+  for(let i=0;i<COLS;i++) html += `<th>${hhmm(g.begin + i*1800)}</th>`;
+  html += '</tr>';
+  for(const row of g.rows){
+    const left = HOURS[row.name];
+    const warn = (left!==undefined && left<6) ? ' class=warn' : '';
+    const tag  = left!==undefined ? `<div class=tag${warn}>${left}h left</div>` : '';
+    html += `<tr><td class=chn><b>${row.number}</b>${row.name}${tag}</td>`;
+    html += `<td class=slots colspan=${COLS}><div class=track>`;
+    for(const s2 of row.slots){
+      const a = Math.max(0,(s2.start-g.begin)/span*100);
+      const b = Math.min(100,(s2.end-g.begin)/span*100);
+      if(b-a < 0.7) continue;
+      const live = (g.now>=s2.start && g.now<s2.end) ? ' live' : '';
+      html += `<div class="blk${live}" style="left:${a}%;width:${b-a}%" `
+            + `title="${s2.title} · ${hhmm(s2.start)}–${hhmm(s2.end)}">${s2.title}</div>`;
+    }
+    html += `<div class=nowbar style="left:${(g.now-g.begin)/span*100}%"></div>`;
+    html += '</div></td></tr>';
+  }
+  $('#guide').innerHTML = html;
+  $('#guidefoot').textContent = `${g.rows.length} channels · ${hhmm(g.begin)}–${hhmm(g.end)}`;
+}
 
 async function refresh(){
   const s=await (await fetch('/api/status')).json();
   LOADS=s.ad_loads;
-  $('#channels').innerHTML = s.channels.length ? s.channels.map(c=>{
-    const on=c.on_now?`${c.on_now} <span class=tag>${c.segment||''}</span>`:'<span class=tag>off air</span>';
-    const left=c.schedule_hours_left!==undefined
-      ? `<span class="tag ${c.schedule_hours_left<6?'warn':'ok'}">${c.schedule_hours_left}h of schedule left</span>`:'';
-    return `<div class=ch><div><b>${c.station}</b><br>${on}</div><div>${left}</div></div>`;
-  }).join('') : '<span class=tag>No channels yet — set your folders below, then Rebuild.</span>';
+  // Hours-left is per station and lives on /api/status, so it is carried across to the
+  // guide rather than shown twice. It is the one operational number the grid cannot show.
+  HOURS = {}; s.channels.forEach(c=>{ HOURS[c.station] = c.schedule_hours_left; });
+  drawGuide();
 
   $('#sub').textContent = `${s.channels.length} channel(s) · ${s.settings.cooldown_minutes} min ad cooldown`;
   $('#adload').value = s.settings.ad_load;
