@@ -506,6 +506,18 @@ def main(argv: list[str] | None = None) -> int:
         print("  airplay: watching for sessions")
     except Exception as exc:  # noqa: BLE001
         print(f"  airplay: not watching ({exc})")
+
+    # Casting from the YouTube app. Unlike AirPlay this needs nothing from the display: the
+    # phone sends a video id and mpv plays it, so the box appears in the cast list and the
+    # screen never changes hands.
+    try:
+        from .youtubecast import CastReceiver  # noqa: PLC0415
+
+        caster = CastReceiver(name="BoobTube",
+                              on_video=box.play_cast, on_stop=box.stop_cast)
+        caster.start()
+    except Exception as exc:  # noqa: BLE001
+        print(f"  cast: not available ({exc})")
     try:
         box.run(drivers)
     except KeyboardInterrupt:

@@ -164,6 +164,23 @@ class MpvPlayer:
             f"--input-ipc-server={self.socket_path}",
         ]
 
+        # Casting from a phone hands this player a YouTube URL, and mpv resolves those with
+        # yt-dlp — but only if it can find one. Debian's packaged yt-dlp is old enough to
+        # break against YouTube regularly, so the build virtualenv's copy is preferred and
+        # PATH is the fallback.
+        #
+        # The format cap is the same lesson the library learned the hard way: this box drops
+        # roughly half the frames of a 4K HEVC file, and YouTube will happily serve 2160p
+        # VP9 to anything that asks. Pinning to AVC at 1080p keeps casting inside what the
+        # hardware decoder can actually do.
+        ytdl = self._find_ytdl()
+        if ytdl:
+            args.append(f"--script-opts=ytdl_hook-ytdl_path={ytdl}")
+            args.append(
+                "--ytdl-format=bestvideo[height<=1080][vcodec^=avc1]+bestaudio[ext=m4a]"
+                "/best[height<=1080]"
+            )
+
         # Which display mode to drive, when rendering straight to KMS.
         #
         # mpv picks its own mode through its DRM context, from whatever the connector calls
@@ -288,6 +305,21 @@ class MpvPlayer:
                 os.unlink(self.socket_path)
             except OSError:
                 pass
+
+    @staticmethod
+    def _find_ytdl() -> str | None:
+        """Where yt-dlp lives, if anywhere.
+
+        Ordered deliberately. The virtualenv copy is installed from PyPI and can be updated
+        the day YouTube changes something; a distribution package cannot, and a stale yt-dlp
+        does not degrade — it stops resolving videos entirely.
+        """
+        import shutil
+
+        candidate = Path(__file__).resolve().parent.parent / ".venv-build" / "bin" / "yt-dlp"
+        if candidate.exists():
+            return str(candidate)
+        return shutil.which("yt-dlp")
 
     def release(self) -> None:
         """Quit mpv and give up the display, leaving this object reusable.

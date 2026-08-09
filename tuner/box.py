@@ -145,6 +145,11 @@ class Box:
         # way quickly and take the screen back the moment the session ends.
         self.casting = False
         self._cast = None
+        # A video a phone told us to play. Not a channel: it has no schedule, nothing
+        # follows it, and `self.channel` keeps pointing at where the dial was so that
+        # stopping returns the viewer there.
+        self.cast_video: str | None = None
+        self._cast_bug_at = 0.0
         self.player = player
         self.mode = Mode.WATCH
         self.menu = Menu(build_root(state or {}))
@@ -220,6 +225,10 @@ class Box:
         pay a settle.
         """
         station = self.lineup.get(channel)
+        if self.cast_video:
+            # Pressing a channel button is the plainest statement there is that the
+            # viewer wants television back, so it wins over the phone.
+            self.cast_video = None
         self.channel = channel
         self._settle_at = time.monotonic() + self.SETTLE
         self._tune_seq += 1
@@ -528,6 +537,52 @@ class Box:
             return
         self.tune(self.channel)
 
+    # ---------- casting from a phone ----------
+
+    def play_cast(self, video_id: str, position: float = 0.0) -> None:
+        """A phone has said what to play. Put it up.
+
+        Nothing is mirrored and no screen changes hands: the phone sent an id, mpv fetches
+        the video itself, and this is an ordinary `loadfile` with a URL instead of a path.
+        That is the whole reason DIAL beat AirPlay here — casting costs the box no more than
+        a channel change does.
+
+        Deliberately not a channel. It has no schedule, nothing follows it, and the dial must
+        remember where the viewer was so that stopping the cast returns them to it rather
+        than to whatever channel one happens to be first.
+        """
+        self._settle_at = 0.0
+        self._tuning = ""
+        self._tune_seq += 1
+        if self._looping:
+            self.player.clear_loop()
+            self._looping = False
+        if self._guide is not None:
+            self.player.hide_overlay(overlay_id=4)
+            self._guide = None
+            self._guide_ass = None
+
+        self.cast_video = video_id
+        self.player.hide_overlay(overlay_id=2)
+        print(f"  cast: playing {video_id} from {position:.0f}s")
+        self.player.tune(f"https://www.youtube.com/watch?v={video_id}", position)
+
+        # The bug says CAST rather than a channel number, because there is no channel to
+        # name and a number here would be a lie about where the dial is.
+        self.bug = BugState()
+        self.player.show_overlay(render_tuning("CAST", "FROM A PHONE"), overlay_id=3)
+        self._cast_bug_at = time.monotonic()
+
+    def stop_cast(self) -> None:
+        """The phone stopped. Go back to whatever the dial was on."""
+        if not self.cast_video:
+            return
+        print("  cast: stopped — back to the dial")
+        self.cast_video = None
+        self.player.hide_overlay(overlay_id=3)
+        self._on_air = None
+        self.tune(self.channel)
+
     def _apply_power(self) -> None:
         """The slow half: the television itself."""
         if self._power is not None:
@@ -808,7 +863,7 @@ class Box:
         # Asleep is the same argument at its limit: mpv is idle *because* the box was told to
         # stop, and "idle" is exactly what this method treats as "the programme ended".
         # Without this it would helpfully start the next one on a television that is off.
-        if self._settle_at or self._tuning or self.asleep:
+        if self._settle_at or self._tuning or self.asleep or self.cast_video:
             return
         if self.mode is Mode.MENU or not self.player.get_property("idle-active"):
             return
