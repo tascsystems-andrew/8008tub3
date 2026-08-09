@@ -26,6 +26,7 @@ import os
 import socket
 import subprocess
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -95,6 +96,17 @@ class MpvPlayer:
         self._sock: socket.socket | None = None
         self._buffer = b""
         self._request_id = 0
+        # Writes only, never the wait. Since the tune moved off the box's lock, two threads
+        # reach this socket: the run loop opening a file, and input pushing an overlay the
+        # instant a button is pressed. `sendall` can loop on a partial write, so without this
+        # a long overlay and a loadfile can interleave into one corrupt line.
+        #
+        # Deliberately not held across the reply wait. `tune` waits up to eight seconds for
+        # playback-restart, and blocking the button behind that would restore precisely the
+        # drag this arrangement exists to remove. It is safe because every call made from the
+        # input thread is fire-and-forget: only the run loop ever reads.
+        self._write_lock = threading.Lock()
+        self._dropping = False
         self._fullscreen_applied = False
         self._backdrop = False
         self._splash_dismissed = False
@@ -284,6 +296,16 @@ class MpvPlayer:
             raise MpvUnavailable("not connected")
         try:
             self._sock.sendall((json.dumps(payload) + "\n").encode())
+        except TimeoutError:
+            # A full socket buffer, which means mpv is *busy*, not gone. The socket carries a
+            # 50ms timeout, and treating that as death is what actually took the tuner down
+            # when the listings were pushing five kilobytes four times a second: `alive` went
+            # false, the run loop saw a dead player and shut down, and systemd restarted the
+            # television — seven times in half an hour.
+            #
+            # Raised rather than swallowed so `_command` can drop the one command; the caller
+            # loses an overlay for a moment, which is the correct price.
+            raise
         except OSError as exc:
             # mpv has gone. That is a normal way for this to end — the viewer pressed quit —
             # so it must unwind cleanly rather than surfacing a broken pipe traceback.
@@ -319,10 +341,11 @@ class MpvPlayer:
         return messages
 
     def _command(self, command: list, *, wait: bool = True, timeout: float = 2.0):
-        self._request_id += 1
-        request_id = self._request_id
         try:
-            self._send({"command": command, "request_id": request_id})
+            with self._write_lock:
+                self._request_id += 1
+                request_id = self._request_id
+                self._send({"command": command, "request_id": request_id})
         except (OSError, TimeoutError) as exc:
             # A write that cannot complete must not reach the run loop. mpv's IPC socket has
             # a finite buffer, and a caller that pushes faster than mpv drains — the listings
@@ -332,8 +355,18 @@ class MpvPlayer:
             #
             # A dropped command is a missing overlay for a moment. A raised one is a black
             # screen, so this is never the right thing to be strict about.
-            print(f"  mpv command dropped ({command[0] if command else '?'}): {exc}")
+            #
+            # Logged on the transition only. A blocked socket drops every command until it
+            # clears, and a line each would put hundreds of identical entries in the journal
+            # — burying the one that says when it started.
+            if not self._dropping:
+                self._dropping = True
+                print(f"  mpv is not draining; dropping commands "
+                      f"({command[0] if command else '?'}: {exc})")
             return None
+        if self._dropping:
+            self._dropping = False
+            print("  mpv is draining again")
         if not wait:
             return None
         deadline = time.monotonic() + timeout
