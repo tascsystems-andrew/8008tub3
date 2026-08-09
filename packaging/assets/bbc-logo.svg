@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000" width="1000" height="1000">
+  <!--
+    BOOBTUBE BROADCASTING CORPORATION — channel 14.
+
+    Drawn to be handed to a video generator as reference, which sets every constraint here.
+    Flat fills, no gradients, no strokes, no fine detail: a generative model reproduces broad
+    geometry faithfully and turns anything delicate into mush. Six shapes, two colours.
+
+    The joke is the seaside-postcard construction — a state crown at a glance, and only
+    rude if you were already looking. That is the whole reason it stays deniable, and the
+    reason the sceptre version was thrown away: it read as one thing only, which is not a
+    joke, it is just a drawing.
+
+    It also has to survive being a channel bug at about forty pixels, so the band is heavy,
+    the orbs are large, and nothing relies on a shape smaller than the band is thick.
+  -->
+  <rect width="1000" height="1000" fill="#0E0C14"/>
+
+  <g transform="translate(500,560)">
+    <!-- Flanking orbs, sitting on the band rather than floating above it. -->
+    <circle cx="-150" cy="-120" r="86" fill="#FFC83C"/>
+    <circle cx="150"  cy="-120" r="86" fill="#FFC83C"/>
+
+    <!-- Centre riser and its orb finial: the tallest element, so the eye reads the crown
+         silhouette before it reads anything else. -->
+    <rect x="-46" y="-300" width="92" height="200" rx="46" fill="#FFC83C"/>
+    <circle cx="0" cy="-308" r="62" fill="#FFC83C"/>
+
+    <!-- The band. Deliberately heavy: it is what holds the mark together at small sizes. -->
+    <path d="M -238 -46 Q -214 60 -186 132 L 186 132 Q 214 60 238 -46 Z" fill="#FFC83C"/>
+
+    <!-- Three band jewels, cut out of the band rather than drawn on top, so there is no
+         second colour to reproduce and they cannot smear into it. -->
+    <circle cx="-104" cy="46" r="28" fill="#0E0C14"/>
+    <circle cx="0"    cy="46" r="28" fill="#0E0C14"/>
+    <circle cx="108"  cy="46" r="28" fill="#0E0C14"/>
+  </g>
+</svg>
