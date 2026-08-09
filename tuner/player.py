@@ -161,6 +161,22 @@ class MpvPlayer:
             # Seconds, not bytes. A byte cap alone buffers least where it is needed most: the
             # same 64 MiB is minutes of a DVD rip and seconds of a remux.
             "--demuxer-readahead-secs=60",
+            # Hold the audio device open for the life of the box, playing silence between
+            # files rather than closing and reopening on every load.
+            #
+            # This box is bare ALSA straight into HDMI: no PipeWire, no Pulse, no dmix, so
+            # the device is exclusive and every channel change means a close and an open. Two
+            # things go wrong with that. The open can lose a race with its own close during a
+            # burst of presses, leaving a channel silent until something reopens it — which
+            # is why going up and back down "sometimes" fixed it. And each open renegotiates
+            # HDMI audio with the television, which a Samsung Frame does not do instantly,
+            # clipping the first seconds of every programme.
+            "--audio-stream-silence=yes",
+            # One sample rate for everything, so the television is never asked to relock.
+            # The library is a mix of 44.1 and 48 kHz and switching between them mid-surf is
+            # the other half of the same problem; resampling costs nothing measurable and the
+            # HDMI link stays up.
+            "--audio-samplerate=48000",
             f"--input-ipc-server={self.socket_path}",
         ]
 
