@@ -63,6 +63,9 @@ class Slot:
     title: str
     start: float
     end: float
+    # What the title was derived from. Never drawn; it is how adjacent samples of the same
+    # programme are recognised as one cell without merging two episodes that share a name.
+    key: str = ""
 
     def clipped(self, window_start: float) -> bool:
         return self.start < window_start
@@ -182,6 +185,7 @@ def rows_from_lineup(lineup, now: float, guide_channel: int) -> list[Row]:
                 cursor += 300
                 continue
             title = _title_of(airing)
+            key = _key_of(airing)
             # `programme_remaining`, not `remaining`: the latter counts to the next thing in
             # the plan, which during a show is its next ad break. A guide built from that
             # would chop every programme into five-minute slivers.
@@ -194,21 +198,57 @@ def rows_from_lineup(lineup, now: float, guide_channel: int) -> list[Row]:
             if span is None:
                 span = getattr(airing, "remaining", 1800.0)
             end = cursor + max(60.0, float(span))
-            if row.slots and row.slots[-1].title == title:
+            if row.slots and row.slots[-1].key == key:
                 row.slots[-1].end = end          # same programme, extend it
             else:
-                row.slots.append(Slot(title, cursor, end))
+                row.slots.append(Slot(title, cursor, end, key))
             cursor = end + 1
         rows.append(row)
     return rows
 
 
 def _title_of(airing) -> str:
+    """The programme's name, resolved the way the channel bug resolves it.
+
+    This used to scrub the filename and nothing more, so the grid read `Howls Moving Castle
+    (2004) BRRip [Dual Audio] - DZY` and `s17e03` while the bug on the very same programme
+    said the real title. `tuner.titles` answers from the map built against Plex at build
+    time; `tidy` is what is left for a file Plex has never seen.
+
+    `feature_path`, not `program.path`, for the same reason the bug uses it: during an ad
+    break the latter is the advert, and a guide is not a log of what is on screen this
+    second — it is what you are watching.
+    """
+    from .titles import describe
+
+    path = getattr(airing, "feature_path", None) or getattr(
+        getattr(airing, "program", None), "path", None)
+    if path:
+        show, detail = describe(path)
+        if show and show != "—":
+            # The episode name earns its place here in a way it does not on the bug: a grid
+            # showing the same series three times running is exactly when a viewer wants to
+            # know which three. Truncation to the cell is the renderer's job.
+            return f"{show} — {detail}" if detail else show
+
     program = getattr(airing, "program", None)
     name = getattr(program, "name", None) or getattr(airing, "title", None)
     if not name:
         return "—"
     return tidy(str(name))
+
+
+def _key_of(airing) -> str:
+    """What makes two samples the same programme, for joining adjacent cells.
+
+    The title cannot do this. Walking a channel samples the same episode several times and
+    the run has to be merged into one cell — but with names resolved properly, three
+    different episodes of one series can *share* a title, and merging on that turns a whole
+    evening of Bill Nye into a single three-hour block. The file is the identity.
+    """
+    path = getattr(airing, "feature_path", None) or getattr(
+        getattr(airing, "program", None), "path", None)
+    return str(path) if path else _title_of(airing)
 
 
 def tidy(name: str) -> str:
