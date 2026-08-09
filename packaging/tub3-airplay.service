@@ -1,0 +1,37 @@
+[Unit]
+# uxplay, advertising the box as an AirPlay receiver for as long as it is on.
+#
+# It has to run continuously, because a phone can only offer what it can already see on the
+# network — there is no "wake the receiver" step in AirPlay. What makes that affordable is
+# that uxplay idle touches nothing: verified on this box, it opens its server sockets and
+# leaves the display alone, building its GStreamer pipeline only when a client connects.
+# So mpv keeps DRM for the whole of normal viewing and only has to yield for a real session.
+#
+# Deliberately a separate unit from tub3-tuner rather than a child of it. uxplay is GPL-3.0
+# and this project is MPL: the boundary is a subprocess and a pipe, never a link, and a unit
+# file is the plainest possible statement of that. It also means AirPlay surviving a tuner
+# restart, and vice versa.
+Description=8008TUB3 AirPlay receiver
+After=network-online.target avahi-daemon.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=andrew
+# -nohold so a second phone takes over rather than being refused, which is what everyone
+# expects from a television. -vs 0 is NOT set: video is the point.
+#
+# kmssink because this box has no compositor — mpv draws straight to DRM and so must uxplay.
+# The two cannot both hold DRM master, which is what the tuner's handover exists to resolve.
+ExecStart=/usr/bin/uxplay -n BoobTube -nohold -vs kmssink -as alsasink
+Restart=always
+RestartSec=3
+# Line-buffered, so the tuner's watcher sees "Client identified as User-Agent" the moment it
+# happens rather than whenever a 4KB buffer happens to fill. The whole handover depends on
+# that line arriving before uxplay asks for the screen.
+Environment=GST_DEBUG=1
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
