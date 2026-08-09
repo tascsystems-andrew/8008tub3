@@ -136,10 +136,34 @@ class Menu:
     def screen(self) -> Screen:
         return self.stack[-1]
 
+    def open(self) -> None:
+        """Come up at the root, resting on the way out.
+
+        Andrew's note, and it is the right default: the button that opens the menu should
+        close it again. Nobody presses SETUP meaning "open settings and stay there" — the
+        commonest thing by far is opening it by accident, or glancing at it, and the escape
+        should be the same button under the same thumb rather than a hunt for the exit.
+
+        It also makes the menu safe to explore. The first press lands on EXIT TO TV, so a
+        second press is always a no-op no matter what was on screen before; you have to
+        deliberately move off it to change anything.
+
+        Resetting to the root matters as much as the cursor. Reopening three levels deep in
+        PICTURE because that is where you were twenty minutes ago is disorienting, and on a
+        screen with no title bar to explain itself it reads as a fault.
+        """
+        self.stack = self.stack[:1]
+        self.status = ""
+        exit_at = next((i for i, item in enumerate(self.screen.items)
+                        if item.kind is ItemKind.BACK), None)
+        if exit_at is not None:
+            self.screen.cursor = exit_at
+        self.visible = True
+
     def handle(self, event: Event) -> None:
         if not self.visible:
             if event.verb is Verb.SELECT:
-                self.visible = True
+                self.open()
             return
 
         if event.verb is Verb.UP:
