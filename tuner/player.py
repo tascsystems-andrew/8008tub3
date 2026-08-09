@@ -603,6 +603,18 @@ class MpvPlayer:
         self._command(["set_property", "video-sync",
                        "audio" if wide else "display-resample"], wait=False)
 
+    def stop(self) -> None:
+        """Stop playback and leave mpv idle — still owning the screen, showing nothing.
+
+        Deliberately not `quit`. This process holds the display for the life of the box and
+        restarting it is the single largest cost in a channel change; standby must not pay
+        that on the way back. Deliberately not `pause` either: a paused television is a frozen
+        frame, which reads as a fault rather than as off.
+        """
+        if not self.alive:
+            return
+        self._command(["stop"], wait=False)
+
     def show_overlay(self, ass_text: str, overlay_id: int = 1) -> None:
         if not self.alive:
             return

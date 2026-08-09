@@ -100,6 +100,34 @@ EVDEV_MAP: dict[int, Verb] = {
 
 EVDEV_DIGITS = {2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 7: 6, 8: 7, 9: 8, 10: 9, 11: 0}
 
+# Modifiers, which are never verbs on their own and were previously discarded. They matter
+# because of how a pen-style clicker expresses a long press.
+#
+# The two arrows swap to a different keycode entirely when held — PAGEUP becomes F5, PAGEDOWN
+# becomes B — so those already arrive as distinguishable events. The top button does not: held
+# or tapped it sends the same TAB, and the only difference is an ALT in front of it. Reading
+# that modifier is what makes the long press of the menu button available at all.
+#
+# Timing is deliberately not involved. The clicker's own firmware decides what counts as a
+# hold, which is why this cannot collide with the rule that a button held a beat too long
+# still does the short-press action: by the time anything arrives here, the remote has already
+# made that decision.
+EVDEV_MODIFIERS: dict[int, str] = {
+    42: "shift", 54: "shift",     # LEFTSHIFT, RIGHTSHIFT
+    56: "alt", 100: "alt",        # LEFTALT, RIGHTALT
+    29: "ctrl", 97: "ctrl",       # LEFTCTRL, RIGHTCTRL
+}
+
+# (modifier, keycode) -> verb. Consulted only when a modifier arrived immediately before, and
+# it wins over EVDEV_MAP for that one press.
+EVDEV_CHORDS: dict[tuple[str, int], Verb] = {
+    ("alt", 15): Verb.POWER,      # ALT + TAB — long press of the top button on the Elan
+}
+
+# A safety net, not the mechanism. The modifier is cleared when its own key-up arrives; this
+# only bounds how long a *lost* release can go on colouring the next press.
+CHORD_HOLD = 5.0
+
 # CEC user-control codes (HDMI CEC spec, UI Command). The TV's own remote lands here.
 CEC_MAP: dict[int, Verb] = {
     0x01: Verb.UP,
@@ -145,10 +173,15 @@ class EvdevDriver(Driver):
 
     def events(self) -> Iterator[Event]:
         import struct
+        import time
 
         # struct input_event: two longs (time), then type, code, value.
         fmt = "llHHi"
         size = struct.calcsize(fmt)
+
+        modifier: str | None = None
+        modifier_at = 0.0
+        chord_fired = False
 
         self._file = open(self.device_path, "rb", buffering=0)
         while True:
@@ -156,13 +189,43 @@ class EvdevDriver(Driver):
             if not data or len(data) < size:
                 break
             _, _, etype, code, value = struct.unpack(fmt, data)
-            # EV_KEY, and key-*down* specifically. value 2 is the kernel's autorepeat, which
-            # is what a held button produces, and dropping it is what makes a long press do
-            # exactly what a short press does — once. Nothing here needs changing for that;
-            # it is called out because it is easy to "fix" by accepting repeats and thereby
-            # make a slightly-too-long press spray the dial.
-            if etype != 0x01 or value != 1:
+            if etype != 0x01:
                 continue
+
+            # Modifiers are tracked across their whole press, so key-up matters here where it
+            # matters nowhere else.
+            if code in EVDEV_MODIFIERS:
+                if value == 1:
+                    if modifier is None:
+                        modifier_at = time.monotonic()
+                        chord_fired = False
+                    modifier = EVDEV_MODIFIERS[code]
+                elif value == 0:
+                    modifier = None
+                    chord_fired = False
+                continue
+
+            # Key-*down* specifically. value 2 is the kernel's autorepeat, which is what a
+            # held button produces, and dropping it is what makes a long press do exactly what
+            # a short press does — once. It is easy to "fix" by accepting repeats and thereby
+            # make a slightly-too-long press spray the dial.
+            if value != 1:
+                continue
+
+            live = modifier is not None and time.monotonic() - modifier_at < CHORD_HOLD
+            if live and (modifier, code) in EVDEV_CHORDS:
+                # One gesture, one action, however long it is held. Captured from the Elan:
+                # a long press sends ALT down, then TAB — but keep holding and TAB arrives
+                # *again*, and again, with ALT still down. Firing per TAB would toggle the
+                # television off and straight back on; letting the repeats fall through to
+                # EVDEV_MAP would open the menu immediately after powering off. Both are the
+                # exact failure a long press is supposed to be immune to, so the repeats are
+                # swallowed either way and only the first one speaks.
+                if not chord_fired:
+                    chord_fired = True
+                    yield Event(EVDEV_CHORDS[(modifier, code)], source=self.name)
+                continue
+
             if code in EVDEV_DIGITS:
                 yield Event(Verb.DIGIT, digit=EVDEV_DIGITS[code], source=self.name)
             elif code in EVDEV_MAP:

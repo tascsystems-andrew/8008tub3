@@ -130,10 +130,16 @@ class Box:
         start_channel: int | None = None,
         state: dict | None = None,
         rescan: Callable[[], list] | None = None,
+        power: Callable[[bool], None] | None = None,
     ):
         self.lineup = lineup
         self._rescan_for = rescan
         self._rescanned_at = 0.0
+        # Injected rather than imported, so `tuner` keeps not depending on `tub3`. Takes one
+        # argument: whether the television should now be on.
+        self._power = power
+        self.asleep = False
+        self._power_pending = False
         self.player = player
         self.mode = Mode.WATCH
         self.menu = Menu(build_root(state or {}))
@@ -428,6 +434,57 @@ class Box:
         self.bug = BugState(airing=airing, shown_at=time.monotonic())
         self._redraw()
 
+    # ---------- power ----------
+
+    def toggle_power(self) -> None:
+        """Sleep or wake. The Pi never goes down.
+
+        "Off" means: stop the stream, clear the screen, and put the television into standby
+        over CEC. "On" means the reverse — wake the set, and rejoin whatever channel was on
+        **at the point the schedule has reached**, not where it was abandoned. That last part
+        is the difference between a television and a paused video, and it is the whole reason
+        the clock stays authoritative rather than the player.
+
+        Called from the input thread, so it does only the instant half. The CEC call is a
+        subprocess that waits on a television answering when it feels like it — the better
+        part of a second — and that belongs to the run loop. Stopping the picture is one
+        fire-and-forget IPC command, so it happens here and the screen goes dark under the
+        thumb.
+        """
+        self.asleep = not self.asleep
+        self._power_pending = True
+        if not self.asleep:
+            return
+
+        # Abandon anything in flight. A settle that fired after the screen went dark would
+        # open a file for a television that is off.
+        self._settle_at = 0.0
+        self._tuning = ""
+        self._tune_seq += 1
+        self.bug = BugState()
+        self.mode = Mode.WATCH
+        self.menu.visible = False
+        self._guide = None
+        self._guide_ass = None
+        self._looping = False
+        for overlay in (1, 2, 3, 4):
+            self.player.hide_overlay(overlay_id=overlay)
+        self.player.stop()
+
+    def _apply_power(self) -> None:
+        """The slow half: the television itself."""
+        if self._power is not None:
+            try:
+                self._power(not self.asleep)
+            except Exception:  # noqa: BLE001 - a television that will not answer is not fatal
+                pass
+        if self.asleep:
+            return
+        # `_on_air` cleared so this is a real tune rather than the "already showing"
+        # shortcut — nothing is showing, whatever the bookkeeping last recorded.
+        self._on_air = None
+        self.tune(self.channel)
+
     def _rescan(self) -> None:
         """Pick up channels that have started existing since the box came on.
 
@@ -518,6 +575,17 @@ class Box:
 
     def handle(self, event: Event) -> None:
         with self._lock:
+            if self.asleep:
+                # Anything wakes it. A box that is off and answers only one of its ten
+                # buttons looks broken, and from the sofa there is no way to tell which
+                # button was the special one — least of all with the screen dark.
+                self.toggle_power()
+                return
+
+            if event.verb is Verb.POWER:
+                self.toggle_power()
+                return
+
             if event.verb is Verb.DIGIT and event.digit is not None:
                 # Direct channel entry, where the remote has digits. Never required — the
                 # same channels are all reachable with up and down alone.
@@ -594,16 +662,26 @@ class Box:
 
                 now = time.monotonic()
                 due: int | None = None
+                power = False
                 with self._lock:
-                    if self._pending_digits and now > self._digit_deadline:
+                    if self._power_pending:
+                        self._power_pending = False
+                        power = True
+                    elif self._pending_digits and now > self._digit_deadline:
                         self._commit_digits()
                     if self._settle_at and now >= self._settle_at:
                         self._settle_at = 0.0
                         due = self.channel
 
-                # Deliberately outside the lock. This opens a file, which is the one genuinely
-                # slow thing the box does, and holding the lock across it would make every
-                # press arriving during a tune wait for it — which is the drag being removed.
+                # Outside the lock, both of them. One shells out to `cec-ctl` and waits on a
+                # television; the other opens a file. Holding the lock across either would
+                # make every press arriving meanwhile wait for it, which is the drag.
+                if power:
+                    self._apply_power()
+                    continue
+                if self.asleep:
+                    continue
+
                 if due is not None:
                     if due == self._on_air:
                         self._reannounce(due)
@@ -651,7 +729,11 @@ class Box:
         # A channel change is already in flight. Advancing here would open a file on the
         # channel being left, and its bug would stamp over the number the viewer is watching
         # for — all to finish a programme nobody is going to see the end of.
-        if self._settle_at or self._tuning:
+        #
+        # Asleep is the same argument at its limit: mpv is idle *because* the box was told to
+        # stop, and "idle" is exactly what this method treats as "the programme ended".
+        # Without this it would helpfully start the next one on a television that is off.
+        if self._settle_at or self._tuning or self.asleep:
             return
         if self.mode is Mode.MENU or not self.player.get_property("idle-active"):
             return
