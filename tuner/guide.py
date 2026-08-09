@@ -29,6 +29,7 @@ evocative detail available for the cost of one `if`.
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -260,11 +261,18 @@ def tidy(name: str) -> str:
     if "__" in name:
         name = name.split("__", 1)[1]
     name = Path(name).stem
-    for noise in ("WEBRip", "WEB-DL", "WEBDL", "BluRay", "HDTV", "DVDRip", "PDTV",
-                  "1080p", "720p", "480p", "2160p", "x264", "x265", "H.264", "H264",
-                  "XviD", "AAC", "AC3", "DDP", "SDTV", "REPACK", "PROPER"):
+    # Bracketed segments first, and whole. A release group and its tags — `[AnimeRG]`,
+    # `[Dual Audio]` — are noise entire, and picking at their contents word by word leaves
+    # `[Dual` and an unclosed bracket on screen, which reads worse than the original.
+    name = re.sub(r"[\[\(](?!\d{4}[\])])[^\]\)]*[\]\)]", " ", name)
+    for noise in ("WEBRip", "WEB-DL", "WEBDL", "BluRay", "BRRip", "BDRip", "HDRip",
+                  "HDTV", "DVDRip", "PDTV", "1080p", "720p", "480p", "2160p",
+                  "x264", "x265", "H.264", "H264", "HEVC", "XviD", "AAC", "AC3", "DDP",
+                  "SDTV", "REPACK", "PROPER"):
         name = name.replace(noise, " ")
     name = name.replace(".", " ").replace("_", " ")
+    # A trailing `- GROUP` is the scene's signature, never part of the name.
+    name = re.sub(r"\s+-\s*[A-Za-z0-9]+\s*$", "", name)
     return " ".join(name.split())[:64] or "—"
 
 
