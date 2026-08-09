@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import Callable
 
 from .dial import DialService
-from .lounge import Lounge
+from .lounge import Lounge, screen_id_for
 
 
 class CastReceiver:
@@ -37,7 +37,13 @@ class CastReceiver:
         self.on_video = on_video
         self.on_stop = on_stop
         self.lounge: Lounge | None = None
-        self.dial = DialService(name=name, on_launch=self._launched, on_stop=self._stopped)
+        # Settled once, here, rather than per session: DIAL publishes it in the app
+        # description before any launch arrives, and every lounge session has to register its
+        # pairing code against that same id or a phone reading the description is pointed at a
+        # screen nobody is listening on.
+        self.screen_id = screen_id_for(name)
+        self.dial = DialService(name=name, screen_id=self.screen_id,
+                                on_launch=self._launched, on_stop=self._stopped)
 
     def _launched(self, app: str, params: dict) -> None:
         code = params.get("pairingCode")
@@ -50,7 +56,7 @@ class CastReceiver:
         if self.lounge:
             self.lounge.close()
         lounge = Lounge(name=self.name, on_video=self.on_video, on_stop=self.on_stop,
-                        theme=params.get("theme", "cl"))
+                        theme=params.get("theme", "cl"), screen_id=self.screen_id)
         self.lounge = lounge
         print(f"  cast: {app} launched, joining session")
         if not lounge.register(code):
