@@ -97,12 +97,19 @@ class DialService:
     def __init__(self, name: str = "BoobTube", port: int = DEFAULT_PORT,
                  apps: tuple[str, ...] = ("YouTube",),
                  on_launch: Callable[[str, dict], None] | None = None,
-                 on_stop: Callable[[str], None] | None = None):
+                 on_stop: Callable[[str], None] | None = None,
+                 screen_id: str | None = None):
         self.name = name
         self.port = port
         self.apps = apps
         self.on_launch = on_launch
         self.on_stop = on_stop
+        # Published in the app description so a sender that finds the box while YouTube is
+        # *already running* can reach the lounge without issuing a fresh pairing code. Without
+        # it such a sender sees a running app it has no address for, and retries until it gives
+        # up. That is the second-phone case, not the first — one phone launches the app itself
+        # and takes the pairing-code path, so this costs nothing until someone else casts.
+        self.screen_id = screen_id
         # Stable across restarts of the process but not across reinstalls. A UDN that changes
         # every boot makes the phone treat the box as a new device each time, which shows up
         # as duplicates in the cast list that never go away.
@@ -201,7 +208,12 @@ class DialService:
                 app = path[len("/apps/"):] if path.startswith("/apps/") else ""
                 if app in service.apps:
                     state = "running" if service.running == app else "stopped"
-                    extra = (f'<link rel="run" href="run"/>' if state == "running" else "")
+                    extra = ('<link rel="run" href="run"/>' if state == "running" else "")
+                    if service.screen_id:
+                        extra += ('<additionalData>'
+                                  f'<screenId>{service.screen_id}</screenId>'
+                                  f'<deviceId>{service.udn}</deviceId>'
+                                  '</additionalData>')
                     body = APP_XML.format(app=app, state=state, extra=extra).encode()
                     self._send(200, body, "application/xml")
                     return

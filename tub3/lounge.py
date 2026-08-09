@@ -109,14 +109,17 @@ class Lounge:
     def __init__(self, name: str = "BoobTube",
                  on_video: Callable[[str, float], None] | None = None,
                  on_stop: Callable[[], None] | None = None,
-                 theme: str = "cl"):
+                 theme: str = "cl", screen_id: str | None = None):
         self.name = name
         # Carried from the DIAL launch and echoed back on every bind. YouTube checks it and
         # hangs up on a mismatch — `forceDisconnect: unmatchingTheme` — immediately after
         # handing out a session id, so the connection *looks* successful and then silently
         # goes nowhere. That presents at the phone as connecting forever.
         self.theme = theme
-        self.screen_id = screen_id_for(name)
+        # Passed in when the DIAL side already published one, so the id a phone reads out of
+        # the app description is the id the pairing code is registered against. Deriving it
+        # twice happens to agree today and is a coincidence, not a guarantee.
+        self.screen_id = screen_id or screen_id_for(name)
         # Two identities, deliberately. The screen id is what the pairing code is attached to;
         # the device id is what the bind speaks as. YouTube treats them as different things,
         # but has to be told they belong together — which is what `device_id` at registration
