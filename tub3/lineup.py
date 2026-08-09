@@ -72,6 +72,13 @@ CHILDRENS_HOURS_START = 6
 CHILDRENS_HOURS_END = 17
 
 
+# Upstream keys a station config by these exact lowercase names, so this is the wire
+# format rather than a display list. Monday first, which is what makes WEEKDAYS[:5] and
+# WEEKDAYS[5:] mean "weekdays" and "weekend" without a second table.
+WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday",
+            "saturday", "sunday")
+
+
 @dataclass
 class Daypart:
     """Which tag airs during which hours. `hours` is inclusive-start, exclusive-end."""
@@ -93,6 +100,31 @@ class Daypart:
     # where a person reads the schedule rather than in a second parallel structure.
     increment: int | None = None
     breaks: str | None = None
+    # Which days this daypart applies to. Empty means every day, which is what a channel
+    # normally wants and keeps the common case unwritten.
+    #
+    # Accepts day names and the two groups people actually think in — "weekdays" and
+    # "weekends" — because the thing being expressed is "The Price Is Right, weekday
+    # mornings", and spelling that as five day names is a list nobody proofreads.
+    #
+    # Upstream already models this: a station config carries `day_templates` plus one key per
+    # weekday naming a template, and every channel here has been pointing all seven at a
+    # single "daily". Nothing new is needed underneath — just a reason to write more than one.
+    days: list[str] = field(default_factory=list)
+
+    def applies_on(self, day: str) -> bool:
+        if not self.days:
+            return True
+        wanted: set[str] = set()
+        for entry in self.days:
+            key = entry.strip().lower()
+            if key in ("weekday", "weekdays"):
+                wanted |= set(WEEKDAYS[:5])
+            elif key in ("weekend", "weekends"):
+                wanted |= set(WEEKDAYS[5:])
+            else:
+                wanted.add(key)
+        return day in wanted
 
     def hours(self) -> list[int]:
         # Wrap past midnight: 22-02 means 22, 23, 0, 1.
@@ -144,6 +176,30 @@ class Channel:
     breaks: str = "standard"
     # Some channels should carry no advertising at all.
     commercial_free: bool = False
+    # Folders of short-form clips for the junction between programmes — the five-minute
+    # cartoon, the interstitial, the thing PBS ran while the next show got ready.
+    #
+    # Only a commercial-free station uses this, and for one it is close to mandatory. Upstream
+    # fills the space between programmes with `find_commercial` on an ordinary station and
+    # with `find_bump` on a commercial-free one, drawing from the *bare* bump tag — so
+    # whatever is here is literally what plays in the gap. Left empty, the station falls back
+    # to repeating its own ident, which schedules but is not something anyone should watch.
+    interstitials: list[str] = field(default_factory=list)
+    # Source paths the owner has personally vetted as suitable for children's hours, where
+    # the folder rule says otherwise. Andrew's decision, 2026-08-09, for The Price Is Right —
+    # a daytime network game show that lives under `TV/` and therefore classifies as adult.
+    #
+    # Deliberately the narrowest possible shape. The rule in `manifest.classify` is that
+    # content is kids *only* when its folder positively says so, and that a lineup breaking
+    # it is refused rather than warned about. That asymmetry is right and is not being
+    # softened: this does not lower the bar, change the classifier, or add a "trust me" flag
+    # to a channel. It names one path at a time, in the lineup file, in the owner's own hand.
+    #
+    # Two properties make it safe to have at all. It cannot match by accident — the path must
+    # be written out in full and must be one this channel already lists as a source. And it
+    # is never silent: every build prints the overrides it honoured, so a decision made once
+    # keeps announcing itself instead of decaying into a setting nobody remembers.
+    rated_kids: list[str] = field(default_factory=list)
 
     @property
     def station(self) -> str:
@@ -201,6 +257,7 @@ def load(path: Path) -> list[Channel]:
                 int(start), int(end), part["tag"],
                 increment=part.get("increment"),
                 breaks=part.get("breaks"),
+                days=list(part.get("days", [])),
             ))
         channels.append(Channel(
             number=int(raw["number"]),
@@ -214,6 +271,8 @@ def load(path: Path) -> list[Channel]:
             break_duration=int(raw.get("break_duration", 120)),
             breaks=raw.get("breaks", "standard"),
             commercial_free=bool(raw.get("commercial_free", False)),
+            interstitials=list(raw.get("interstitials", [])),
+            rated_kids=list(raw.get("rated_kids", [])),
         ))
     return sorted(channels, key=lambda c: c.number)
 
@@ -278,6 +337,29 @@ def check_sources(channels: list[Channel]) -> list[str]:
     for channel in channels:
         if channel.kind == "guide":
             continue
+
+        # Checked by the same rule and for a sharper reason than ordinary sources. A junction
+        # folder that resolves to nothing does not thin a pool out — it leaves the station
+        # falling back to its own ident on a loop, which schedules, so nothing anywhere
+        # reports a fault.
+        for folder in channel.interstitials:
+            source = Path(folder)
+            key = f"interstitials\x00{folder}"
+            if key in seen:
+                continue
+            if not source.exists():
+                problems.append(
+                    f"channel {channel.number} ({channel.name!r}) names interstitial folder "
+                    f"{folder!r}, which does not exist — check the spelling, accents included"
+                )
+                seen.add(key)
+            elif not _has_video(source):
+                problems.append(
+                    f"channel {channel.number} ({channel.name!r}) names interstitial folder "
+                    f"{folder!r}, which holds no video files"
+                )
+                seen.add(key)
+
         for tag, folders in channel.sources.items():
             patterns = [p.lower() for p in channel.exclude.get(tag, [])]
             matched: set[str] = set()
@@ -325,10 +407,11 @@ def check_sources(channels: list[Channel]) -> list[str]:
                         f"from tag {tag!r}, but nothing in that tag matches it — the title "
                         f"may have been renamed, and it is not being kept out"
                     )
+
     return problems
 
 
-def audit(channels: list[Channel]) -> list[str]:
+def audit(channels: list[Channel]) -> tuple[list[str], list[str]]:
     """Refuse a lineup that puts unrated content on a channel rated for children.
 
     This exists because the dial is meant to be *proposed* by a model reading a manifest,
@@ -367,6 +450,9 @@ def audit(channels: list[Channel]) -> list[str]:
         plex_index = {}
 
     problems: list[str] = []
+    # Honoured overrides, returned alongside the refusals so a caller can print them. They
+    # are not warnings and not errors — they are decisions, and they get said out loud.
+    overrides: list[str] = []
     for channel in channels:
         if channel.rating not in ("kids", "family"):
             continue
@@ -409,13 +495,36 @@ def audit(channels: list[Channel]) -> list[str]:
                     if order.get(plex_rating, 2) >= order.get(rating, 2):
                         rating, why = plex_rating, plex_why
 
+                if rating != "kids" and folder in channel.rated_kids:
+                    # Vetted by the owner for this channel, by full path. Recorded rather
+                    # than swallowed: an override that stops being mentioned is one nobody
+                    # re-examines, and this is the one guard where that matters.
+                    overrides.append(
+                        f"channel {channel.number} ({channel.name!r}) airs {folder!r} in "
+                        f"children's hours by explicit override — the folder rule calls it "
+                        f"{rating} ({why})"
+                    )
+                    continue
+
                 if rating != "kids":
                     problems.append(
                         f"channel {channel.number} ({channel.name!r}) is rated "
                         f"{channel.rating!r} but tag {tag!r} draws from {folder!r}, "
                         f"which is rated {rating} — {why}"
                     )
-    return problems
+
+        # A vetted path no tag on this channel draws from does nothing, and sits in the file
+        # looking like it did. It fails closed — the real source still meets the guard — but
+        # a stale line is exactly what makes an override list stop being trusted.
+        listed = {folder for folders in channel.sources.values() for folder in folders}
+        for folder in channel.rated_kids:
+            if folder not in listed:
+                problems.append(
+                    f"channel {channel.number} ({channel.name!r}) vets {folder!r} for "
+                    f"children's hours, but no tag on this channel draws from it"
+                )
+
+    return problems, overrides
 
 
 def _iter_videos(folder: Path, *, sort: bool = True):
@@ -548,7 +657,53 @@ def build_bumps(media_root: Path, channel: Channel, bumpers: Path | None) -> int
         card_clip(pre / "brb_0.mkv", heading="WE'LL BE", subheading="RIGHT BACK", seconds=4.0)
         brbs = 1
 
-    return idents + brbs
+    return idents + brbs + _build_junction(pool, channel)
+
+
+def _build_junction(pool: Path, channel: Channel) -> int:
+    """Clips directly in the bump folder — what plays *between* programmes.
+
+    Only a commercial-free station reads this, and for one it must not be empty. Upstream
+    fills the gap with `find_commercial` on an ordinary station and with `find_bump` on a
+    commercial-free one (`fs42/catalog.py:680`), and `find_bump` with no position looks up the
+    **bare** tag — a different `clip_index` key from `-pre` and `-post`. With only those two
+    populated it raises `NoFillerContentFound`, which is a *sibling* of
+    `MatchingContentNotFound` rather than a subclass, so upstream's own handlers do not catch
+    it and the station ends with zero blocks instead of a degraded schedule.
+
+    That is exactly what SUNNY DAYS was: 990 files, a valid config, a catalog of 992 items,
+    and nothing on the dial — reported once, at the end of a long build, as one line.
+
+    The right content here is short-form programming rather than furniture: the five-minute
+    cartoon between shows, which is what a commercial-free children's channel actually ran.
+    Falling back to the station ident keeps it schedulable, but a four-second card repeated to
+    fill a four-minute junction is not something to leave in place.
+    """
+    if not channel.commercial_free:
+        return 0
+
+    linked = 0
+    for folder in channel.interstitials:
+        source = Path(folder)
+        if not source.exists():
+            continue
+        prefix = _normalise(source.stem if source.is_file() else source.name)[:28]
+        for item in _sources_in(source):
+            link = pool / f"{prefix}__{item.name}"
+            if not link.exists():
+                try:
+                    link.symlink_to(item.resolve())
+                except OSError:
+                    continue
+            linked += 1
+    if linked:
+        return linked
+
+    from .cards import card_clip
+
+    card_clip(pool / "junction_0.mkv", heading=f"CHANNEL {channel.number}",
+              subheading=channel.name, seconds=4.0)
+    return 1
 
 
 def _link_pool(media_root: Path, tag: str, folders: list[str],
@@ -593,18 +748,49 @@ def _link_pool(media_root: Path, tag: str, folders: list[str],
     return linked
 
 
-def _day_template(channel: Channel) -> dict[str, dict]:
-    """Expand hour ranges into the 24 hourly slots upstream requires.
+def _day_template(channel: Channel, day: str) -> dict[str, dict]:
+    """Expand hour ranges into the 24 hourly slots upstream requires, for one day.
 
     Any hour a lineup does not mention falls back to the channel's first daypart rather than
     being left empty — an empty hour is dead air, and a viewer reads dead air as a fault.
+
+    Later dayparts win an hour they share, which is what makes a weekday exception work: the
+    broad `9-15 shows-kids` is written first and `10-11 shows-price, weekdays` after it, in
+    the order a person would say them.
     """
     fallback = channel.default_tag()
     slots = {str(hour): {"tags": fallback} for hour in range(24)}
     for part in channel.dayparts:
+        if not part.applies_on(day):
+            continue
         for hour in part.hours():
             slots[str(hour)] = {"tags": part.tag}
     return slots
+
+
+def _day_templates(channel: Channel) -> tuple[dict[str, dict], dict[str, str]]:
+    """The templates a channel needs, and which day uses which.
+
+    Deduplicated by content rather than emitted one per day. A channel with no day-specific
+    dayparts — every channel here until now — produces exactly one template called `daily`
+    and seven keys pointing at it, byte for byte what was written before. Only a channel that
+    actually differs across the week grows a second.
+    """
+    templates: dict[str, dict] = {}
+    by_day: dict[str, str] = {}
+    signatures: dict[str, str] = {}
+
+    for day in WEEKDAYS:
+        slots = _day_template(channel, day)
+        signature = json.dumps(slots, sort_keys=True)
+        name = signatures.get(signature)
+        if name is None:
+            name = "daily" if not signatures else day
+            signatures[signature] = name
+            templates[name] = slots
+        by_day[day] = name
+
+    return templates, by_day
 
 
 def compile_station(channel: Channel, media_root: Path, *, pools: dict[str, str]) -> dict:
@@ -647,10 +833,14 @@ def compile_station(channel: Channel, media_root: Path, *, pools: dict[str, str]
         "schedule_increment": channel.increment or 30,
         "standby_image": "runtime/tub3_standby.png",
         "be_right_back_media": "runtime/tub3_brb.png",
-        "day_templates": {"daily": _day_template(channel)},
-        "monday": "daily", "tuesday": "daily", "wednesday": "daily",
-        "thursday": "daily", "friday": "daily", "saturday": "daily", "sunday": "daily",
     }
+
+    # Written after the literal rather than inside it: a channel that differs across the week
+    # contributes both the templates and the seven day keys, and splitting that across a dict
+    # literal reads worse than two lines.
+    templates, by_day = _day_templates(channel)
+    conf["day_templates"] = templates
+    conf.update(by_day)
     if commercial_tag:
         conf["commercial_dir"] = commercial_tag
 
@@ -681,7 +871,12 @@ def apply(lineup_path: Path, media_root: Path, ads_root: Path,
 
     # Both checks before anything is written. A lineup that fails either is not partially
     # applied.
-    problems = audit(channels)
+    problems, overrides = audit(channels)
+    # Said out loud on every build, not just the first. An override is a standing decision
+    # about what a child may be shown, and the failure mode of these is that they go quiet
+    # and stop being reconsidered.
+    for note in overrides:
+        print(f"  vetted: {note}")
     if problems:
         raise UnsafeLineup(
             "This lineup would place content not marked for children on a channel rated "
@@ -761,11 +956,16 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     channels = load(args.lineup)
-    problems = audit(channels)
+    problems, overrides = audit(channels)
     clashes = check_reserved(channels)
     missing = check_sources(channels)
     if args.dry_run:
         print()
+        if overrides:
+            print("  VETTED — allowed in children's hours by explicit override:\n")
+            for note in overrides:
+                print(f"    · {note}")
+            print()
         # Both sections, always. `apply` raises on the first of the two it meets, which is
         # right for a guard but wrong for a dry run — the point of asking first is to come
         # away with the whole list, not to fix one thing and rediscover the other.
