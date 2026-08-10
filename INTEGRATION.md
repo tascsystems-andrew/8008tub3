@@ -1,6 +1,6 @@
 # 8008TUB3 × FieldStation42 — Integration Plan
 
-*Verified against `vendor/FieldStation42` @ `2baa022` (per `/Users/andrew/BoobTube/8008tub3/UPSTREAM.md`) and the 8008TUB3 source at `/Users/andrew/BoobTube/8008tub3/{tuner,adsplice,normalize,mediakit}` on 2026-08-07. Every file:line below was opened, not inferred.*
+*Verified against `vendor/FieldStation42` @ `2baa022` (per `UPSTREAM.md`) and the 8008TUB3 source at the repo root on 2026-08-07. Every file:line below was opened, not inferred.*
 
 ---
 
