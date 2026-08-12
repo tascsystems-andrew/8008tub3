@@ -177,6 +177,14 @@ class MpvPlayer:
             # the other half of the same problem; resampling costs nothing measurable and the
             # HDMI link stays up.
             "--audio-samplerate=48000",
+            # English first, whatever the file says it prefers. Dual-audio releases routinely
+            # flag the original language as default — Ponyo shipped `jpn` as default=True with
+            # the English dub sitting untouched as track 2 — and mpv obeys that flag, so a
+            # film in the family slot came up in Japanese with no way to fix it from a
+            # four-button remote. `--alang` outranks the default flag; on a file with no
+            # English track it simply matches nothing and the default is used, so this costs
+            # genuinely foreign-language content nothing.
+            "--alang=eng,en,english",
             f"--input-ipc-server={self.socket_path}",
         ]
 

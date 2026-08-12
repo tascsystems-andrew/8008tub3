@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -140,6 +141,12 @@ class Box:
         self._power = power
         self.asleep = False
         self._power_pending = False
+        # The last few presses, as (verb, when, channel-before-it-was-acted-on), for matching
+        # the unlock code against. Bounded by the code's own length, so it costs one tuple per
+        # press and never grows.
+        self._recent: deque[tuple[Verb, float, int]] = deque(maxlen=len(self.UNLOCK))
+        self._unlock_channel = 0
+        self._wake_pending = False
         # An AirPlay session owns the screen. Unlike standby, this is not something the
         # viewer asked the box for — a phone decided — so the box's job is to get out of the
         # way quickly and take the screen back the moment the session ends.
@@ -203,6 +210,24 @@ class Box:
     # showed up exactly as you would expect: two stations finished building, and neither the
     # dial nor the guide knew they existed.
     RESCAN = 60.0
+
+    # The way back when the television is on the wrong input and its own remote is lost.
+    #
+    # The box cannot simply wake the set whenever it feels like it — `tub3.cec.tv_on` says so
+    # in its own docstring, and it is right: an appliance that can turn a television on by
+    # itself eventually does it at 3am. So this is the compromise. It is a deliberate act on
+    # the remote in your hand, it cannot happen by accident, and it needs nothing on screen to
+    # find — which matters, because when you need it the screen is showing something else.
+    #
+    # Every press still does its normal job on the way through, so a partial code is
+    # indistinguishable from ordinary surfing. On completion the channel you started on is
+    # restored and the menu is suppressed, so the code leaves no trace but the television
+    # coming back.
+    UNLOCK = (Verb.UP, Verb.UP, Verb.DOWN, Verb.DOWN, Verb.UP, Verb.UP, Verb.SELECT)
+
+    # Long enough to be typed deliberately at a dark screen, short enough that six presses
+    # spread across an evening's surfing never accumulate into it.
+    UNLOCK_GAP = 2.5
 
     # ---------- tuning ----------
 
@@ -428,6 +453,51 @@ class Box:
     def surf(self, delta: int) -> None:
         self.select(self.lineup.surf(self.channel, delta))
 
+    # ---------- the way back ----------
+
+    def _unlocked(self, verb: Verb) -> bool:
+        """Record the press and report whether the last few spell the code.
+
+        A rolling window rather than a cursor that advances and resets. The obvious cursor is
+        wrong in a way that only shows up when someone fumbles: after `up up up`, a cursor
+        that restarts on the mismatch has thrown away the fact that the last two presses are
+        a valid opening, and the code typed straight afterwards silently fails. Which is
+        precisely the situation it exists for — you press up, notice the screen is dark, and
+        immediately enter the code without pausing first.
+
+        Comparing the tail of a window has no such state to get wrong. Every press is also
+        stamped with the channel that was showing *before* it was acted on, so the first
+        press of a matching window carries the channel to hand back.
+        """
+        now = time.monotonic()
+        self._recent.append((verb, now, self.channel))
+        if len(self._recent) < len(self.UNLOCK):
+            return False
+        if tuple(entry[0] for entry in self._recent) != self.UNLOCK:
+            return False
+        # Typed as one gesture, not assembled out of an evening's surfing.
+        gaps = [b[1] - a[1] for a, b in zip(self._recent, list(self._recent)[1:])]
+        if any(gap > self.UNLOCK_GAP for gap in gaps):
+            return False
+        self._unlock_channel = self._recent[0][2]
+        self._recent.clear()
+        return True
+
+    def _wake_television(self) -> None:
+        """The code landed. Put the channel back and ask the run loop to wake the set.
+
+        Called from the input thread holding the lock, so it does the instant half only. The
+        CEC sequence shells out and waits on a television answering when it feels like it —
+        the better part of a second — and that belongs to the run loop, exactly as standby
+        does.
+        """
+        print("  unlock: waking the television")
+        # The six presses that spelled the code moved the dial. Give it back — usually for
+        # free, since a burst inside one settle window never opened anything.
+        if self.channel != self._unlock_channel:
+            self.select(self._unlock_channel)
+        self._wake_pending = True
+
     def _reannounce(self, channel: int) -> None:
         """The burst ended on the channel already showing. Nothing to open — just say so.
 
@@ -597,6 +667,21 @@ class Box:
         self._on_air = None
         self.tune(self.channel)
 
+    def _wake_now(self) -> None:
+        """Wake the television without touching the box's own power state.
+
+        Deliberately not `toggle_power`. The box is already awake — that is how the code got
+        entered — and what is wrong is on the television's side of the cable: it is off, or
+        showing the Apple TV. So this sends the same CEC sequence standby's wake does and
+        changes nothing else. Calling `toggle_power` here would put a working tuner to sleep.
+        """
+        if self._power is None:
+            return
+        try:
+            self._power(True)
+        except Exception:  # noqa: BLE001 - a television that will not answer is not fatal
+            pass
+
     def _rescan(self) -> None:
         """Pick up channels that have started existing since the box came on.
 
@@ -704,6 +789,14 @@ class Box:
                 self.toggle_power()
                 return
 
+            # Before anything else acts on the press, so the tracker sees every verb and a
+            # digit or a volume nudge resets it. Runs *alongside* the normal handling rather
+            # than instead of it — an incomplete code has to behave exactly like the surfing
+            # it looks like, or the box feels haunted.
+            if self._unlocked(event.verb):
+                self._wake_television()
+                return
+
             if event.verb is Verb.POWER:
                 self.toggle_power()
                 return
@@ -793,7 +886,11 @@ class Box:
                 now = time.monotonic()
                 due: int | None = None
                 power = False
+                wake = False
                 with self._lock:
+                    if self._wake_pending:
+                        self._wake_pending = False
+                        wake = True
                     if self._power_pending:
                         self._power_pending = False
                         power = True
@@ -806,6 +903,10 @@ class Box:
                 # Outside the lock, both of them. One shells out to `cec-ctl` and waits on a
                 # television; the other opens a file. Holding the lock across either would
                 # make every press arriving meanwhile wait for it, which is the drag.
+                if wake:
+                    # Not `continue` — the code does not change what is playing, so the
+                    # settle and housekeeping below still have work to do on this tick.
+                    self._wake_now()
                 if power:
                     self._apply_power()
                     continue
