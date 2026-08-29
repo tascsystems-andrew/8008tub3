@@ -491,8 +491,29 @@ def main(argv: list[str] | None = None) -> int:
             return
         print(f"  cec: {want} {'sent' if ok else 'FAILED — the set will not have moved'}")
 
+    def volume(ui_cmd: str) -> None:
+        """Hand a volume key to the television.
+
+        The player deliberately does not do this. Software gain cannot reach a soundbar the
+        set is feeding over ARC, it is invisible to the TV's own remote, and mpv's ceiling of
+        130% clips well before it is loud. Passing the key on means the box's remote and the
+        television's remote move the same number.
+
+        The audio system is preferred when one exists, because with System Audio Mode on it
+        is the device that actually owns the level. Checked per call rather than cached: a
+        soundbar is exactly the kind of thing that appears on the bus months later.
+        """
+        from . import cec  # noqa: PLC0415 - keeps CEC out of the import path on a desktop
+
+        target = cec.AUDIO_ADDRESS if cec.audio_system_present() else cec.TV_ADDRESS
+        try:
+            if not cec.send_key(ui_cmd, to=target):
+                print(f"  cec: volume {ui_cmd} not acknowledged")
+        except Exception as exc:  # noqa: BLE001
+            print(f"  cec: volume {ui_cmd} raised {exc}")
+
     box = Box(lineup, player, start_channel=start, state=state,
-              rescan=rescan, power=power)
+              rescan=rescan, power=power, volume=volume)
 
     # AirPlay, if the receiver is running. Deliberately not required and never fatal: the
     # unit is separate, it may be stopped or absent, and a television whose channels work is

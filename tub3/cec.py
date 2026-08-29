@@ -114,7 +114,14 @@ def diagnose() -> Diagnosis:
         code, out = _run(["cec-ctl", "-d", CEC_DEVICE, "-S"])
         if code == 0:
             names = re.findall(r"osd name\s*:\s*'([^']*)'", out, re.I)
-            audio = re.search(r"Audio System|Tuner|Playback Device 2", out, re.I)
+            # Asked of the bus, not matched against the topology dump. The dump names every
+            # device *type* it knows about, including this box's own — we register as logical
+            # address 8, whose name is "Playback Device 2" — so a regex over that text
+            # reported an audio system on every box that ever ran it, always, by matching
+            # ourselves. That warning then sent a volume investigation looking for a soundbar
+            # that was never there. ("Tuner" was wrong on its own terms too: a Tuner is a
+            # broadcast receiver, nothing to do with audio.)
+            audio = audio_system_present()
             if names:
                 result.checks.append(Check("bus", True, "devices on the bus: " + ", ".join(names)))
             else:
@@ -126,10 +133,9 @@ def diagnose() -> Diagnosis:
                 ))
             if audio:
                 result.checks.append(Check(
-                    "avr", False, "an audio system is in the HDMI chain",
-                    "Soundbars and AVRs frequently refuse to relay CEC key presses. If the "
-                    "remote does not work, connect the Pi to the TV directly and let the TV "
-                    "feed the soundbar over ARC.",
+                    "avr", True, "an audio system is on the bus — volume will go to it",
+                    "Volume keys are addressed to the amplifier rather than the television "
+                    "when one answers, which is what System Audio Mode expects.",
                 ))
         else:
             result.checks.append(Check("bus", False, "could not scan the CEC bus", out.strip()[:160]))
@@ -151,6 +157,58 @@ def tv_on() -> bool:
     """
     from .cectest import wake
     return wake()
+
+
+# Volume is the television's job, not the player's.
+#
+# mpv can attenuate its own output, and that was the first implementation — but software
+# gain is the wrong instrument here. It cannot reach a soundbar the television is feeding
+# over ARC, it is invisible to anyone using the TV's own remote, and mpv's ceiling is 130%,
+# which is 30% above unity and clips before it gets loud. The box had in fact walked itself
+# up to exactly 130 and stopped, which is what "volume up does nothing" turned out to mean.
+#
+# So: send the key press onward and let the set do what it does for every other input.
+#
+# The target is the TV rather than an audio system. The spec allows either — a source
+# addresses the audio system directly when System Audio Mode is on — but on this bus address
+# 5 max-retries with no acknowledgement while address 0 answers in 34ms, so there is nothing
+# there to talk to. `audio_system_present` re-checks rather than assuming, because an AVR is
+# exactly the sort of thing that appears later when somebody buys a soundbar.
+VOLUME_UP = "volume-up"
+VOLUME_DOWN = "volume-down"
+VOLUME_MUTE = "mute"
+
+TV_ADDRESS = "0"
+AUDIO_ADDRESS = "5"
+
+
+def audio_system_present(timeout: float = 3.0) -> bool:
+    """Is there an amplifier on the bus that should own volume?
+
+    One poll, short timeout, and a negative answer on anything unexpected. This runs on the
+    way to a volume key, so it must never be the reason a button feels slow.
+    """
+    if not Path(CEC_DEVICE).exists() or not shutil.which("cec-ctl"):
+        return False
+    code, out = _run(["cec-ctl", "-d", CEC_DEVICE, "--to", AUDIO_ADDRESS,
+                      "--give-osd-name"], timeout=timeout)
+    return code == 0 and "Not Acknowledged" not in out
+
+
+def send_key(ui_cmd: str, to: str = TV_ADDRESS, timeout: float = 3.0) -> bool:
+    """One press and its release, which is a pair and has to stay a pair.
+
+    A press with no release leaves the television repeating the key — the CEC equivalent of
+    a stuck button — until it times the source out on its own. Sending the release even when
+    the press failed is deliberate for that reason.
+    """
+    if not Path(CEC_DEVICE).exists() or not shutil.which("cec-ctl"):
+        return False
+    code, out = _run(["cec-ctl", "-d", CEC_DEVICE, "--to", to,
+                      "--user-control-pressed", f"ui-cmd={ui_cmd}"], timeout=timeout)
+    _run(["cec-ctl", "-d", CEC_DEVICE, "--to", to, "--user-control-released"],
+         timeout=timeout)
+    return code == 0 and "Not Acknowledged" not in out
 
 
 def tv_off() -> bool:
