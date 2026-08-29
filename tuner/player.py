@@ -185,6 +185,12 @@ class MpvPlayer:
             # English track it simply matches nothing and the default is used, so this costs
             # genuinely foreign-language content nothing.
             "--alang=eng,en,english",
+            # Unity gain, pinned. Volume belongs to the television now, and the player's job
+            # is to hand it an unmodified signal. Left to itself this drifts: the old
+            # software-volume keys walked it to mpv's 130% ceiling and stopped there, which
+            # is 30% above unity — everything playing hot and clipping, and "volume up does
+            # nothing" because there was nowhere left to go.
+            "--volume=100",
             f"--input-ipc-server={self.socket_path}",
         ]
 

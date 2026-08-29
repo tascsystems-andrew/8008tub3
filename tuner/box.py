@@ -132,6 +132,7 @@ class Box:
         state: dict | None = None,
         rescan: Callable[[], list] | None = None,
         power: Callable[[bool], None] | None = None,
+        volume: Callable[[str], None] | None = None,
     ):
         self.lineup = lineup
         self._rescan_for = rescan
@@ -139,6 +140,17 @@ class Box:
         # Injected rather than imported, so `tuner` keeps not depending on `tub3`. Takes one
         # argument: whether the television should now be on.
         self._power = power
+        # Same arrangement for volume, which is the television's to set and not the player's.
+        # Takes a CEC ui-cmd name.
+        self._volume = volume
+        # Volume keys go out on their own thread. Each one is two `cec-ctl` invocations and
+        # the better part of 70ms of waiting on a television, and the input thread cannot pay
+        # that — a held button autorepeats far faster than the bus can answer. The queue is
+        # shallow on purpose: when the bus falls behind, dropping presses keeps the dial and
+        # the menu responsive, where queueing them would have the volume still crawling
+        # upward seconds after the thumb came off.
+        self._volume_q: deque[str] = deque(maxlen=4)
+        self._volume_wake = threading.Event()
         self.asleep = False
         self._power_pending = False
         # The last few presses, as (verb, when, channel-before-it-was-acted-on), for matching
@@ -452,6 +464,40 @@ class Box:
 
     def surf(self, delta: int) -> None:
         self.select(self.lineup.surf(self.channel, delta))
+
+    # ---------- volume ----------
+
+    def _send_volume(self, ui_cmd: str, fallback: int | None) -> None:
+        """Queue a volume key for the television, or move the player if there is no bus.
+
+        Called on the input thread holding the lock, so it does nothing that waits. The
+        fallback exists for `--windowed` on a desktop, where there is no CEC device and
+        software gain is the only volume there is.
+        """
+        if self._volume is None:
+            if fallback is None:
+                self.player.toggle_mute()
+            else:
+                self.player.nudge_volume(fallback)
+            return
+        self._volume_q.append(ui_cmd)
+        self._volume_wake.set()
+
+    def _volume_worker(self) -> None:
+        """Drain volume keys onto the bus, one at a time, off the input path."""
+        while self.running:
+            if not self._volume_wake.wait(timeout=0.5):
+                continue
+            self._volume_wake.clear()
+            while self._volume_q:
+                try:
+                    ui_cmd = self._volume_q.popleft()
+                except IndexError:
+                    break
+                try:
+                    self._volume(ui_cmd)
+                except Exception:  # noqa: BLE001 - a television that will not answer is not fatal
+                    pass
 
     # ---------- the way back ----------
 
@@ -827,13 +873,13 @@ class Box:
             # the four verbs — nothing depends on it — but a television without volume on the
             # remote is a television people complain about.
             if event.verb is Verb.VOLUME_UP:
-                self.player.nudge_volume(+5)
+                self._send_volume("volume-up", +5)
                 return
             if event.verb is Verb.VOLUME_DOWN:
-                self.player.nudge_volume(-5)
+                self._send_volume("volume-down", -5)
                 return
             if event.verb is Verb.MUTE:
-                self.player.toggle_mute()
+                self._send_volume("mute", None)
                 return
 
             # UP goes to a *higher* channel number, which is the opposite of what the same
@@ -866,6 +912,9 @@ class Box:
 
         for driver in drivers:
             threading.Thread(target=self._pump, args=(driver,), daemon=True).start()
+
+        if self._volume is not None:
+            threading.Thread(target=self._volume_worker, daemon=True).start()
 
         housekept_at = 0.0
         try:
