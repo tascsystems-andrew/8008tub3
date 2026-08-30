@@ -491,7 +491,25 @@ def main(argv: list[str] | None = None) -> int:
             return
         print(f"  cec: {want} {'sent' if ok else 'FAILED — the set will not have moved'}")
 
-    def volume(ui_cmd: str) -> None:
+    def tv_state() -> str:
+        """What the television says its own power state is.
+
+        Ground truth for the power button. Without it the box can only toggle its own idea
+        of being awake, which is wrong whenever the two have drifted apart — and they drift
+        every time somebody picks up the TV remote.
+        """
+        from . import cectest  # noqa: PLC0415 - keeps CEC off the desktop import path
+
+        try:
+            state, _ = cectest.power_status(timeout=3.0)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  cec: power status raised {exc}")
+            return "unknown"
+        return state or "unknown"
+
+    volume_target: str | None = None
+
+    def volume(action: str, ui_cmd: str) -> None:
         """Hand a volume key to the television.
 
         The player deliberately does not do this. Software gain cannot reach a soundbar the
@@ -505,15 +523,24 @@ def main(argv: list[str] | None = None) -> int:
         """
         from . import cec  # noqa: PLC0415 - keeps CEC out of the import path on a desktop
 
-        target = cec.AUDIO_ADDRESS if cec.audio_system_present() else cec.TV_ADDRESS
+        # Resolved once and remembered for the length of a hold: probing the bus costs a
+        # round trip, and paying it per repeat would halve the ramp rate to answer a question
+        # whose answer cannot change while a button is down.
+        nonlocal volume_target
+        # Resolved once and remembered for the length of a hold: probing the bus costs a
+        # round trip, and paying it per step would halve a ramp that is already bounded by
+        # how fast `cec-ctl` starts up.
+        if volume_target is None:
+            volume_target = (cec.AUDIO_ADDRESS if cec.audio_system_present()
+                             else cec.TV_ADDRESS)
         try:
-            if not cec.send_key(ui_cmd, to=target):
+            if not cec.send_key(ui_cmd, to=volume_target):
                 print(f"  cec: volume {ui_cmd} not acknowledged")
         except Exception as exc:  # noqa: BLE001
             print(f"  cec: volume {ui_cmd} raised {exc}")
 
     box = Box(lineup, player, start_channel=start, state=state,
-              rescan=rescan, power=power, volume=volume)
+              rescan=rescan, power=power, volume=volume, tv_state=tv_state)
 
     # AirPlay, if the receiver is running. Deliberately not required and never fatal: the
     # unit is separate, it may be stopped or absent, and a television whose channels work is
