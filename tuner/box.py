@@ -261,23 +261,34 @@ class Box:
     # spread across an evening's surfing never accumulate into it.
     UNLOCK_GAP = 2.5
 
-    # Silence that means the volume button came up. Repeats arrive about 40ms apart once a
-    # hold is under way — the 250ms gap before the *first* one is the kernel's initial delay,
-    # and it is not paid here because a hold is only entered once that first repeat lands.
-    # So this needs to clear 40ms comfortably and nothing more: every millisecond of slack is
-    # volume that keeps moving after the button is up.
-    VOLUME_HOLD_GAP = 0.12
+    # How long a hold keeps running after the remote stops reporting it — and it is this
+    # large because the remote is lying.
+    #
+    # The clicker is an ELAN wireless presenter: a slide-advance device whose dongle releases
+    # the key on its own after about 700ms whether or not a thumb is still on it. Captured
+    # during a deliberate five-second hold:
+    #
+    #     17:08:57.289  down
+    #     17:08:57.548  REPEAT        (every 40ms, kernel autorepeat, working correctly)
+    #     17:08:57.988  REPEAT
+    #     17:08:57.993  up            <- 704ms in, button still physically down
+    #
+    # Every "it only goes up three dashes" was this, and the television was never at fault:
+    # at 300ms a step, 704ms buys three steps. Tuning the rate could not fix it, which is why
+    # four attempts at tuning the rate did not.
+    #
+    # So a hold runs on past the phantom release. Repeats are the signal that a hold was
+    # *intended* — they only start 250ms in, so a genuine short press never produces one and
+    # is still exactly one step. What this buys is a hold that behaves like a hold; what it
+    # costs is that letting go early still spends the rest of the run.
+    # Conservative until the remote's behaviour is confirmed. Running a hold on past the
+    # reported release would compensate for a lying remote, but if the remote is telling the
+    # truth it is just volume moving on its own after the button is up.
+    VOLUME_HOLD_GAP = 0.25
 
     # Minimum time between key events while a button is held, and it exists because the
     # television has a queue.
     #
-    # The bus will carry about 6.4 a second and the set will not absorb them: fed at that
-    # rate it took the volume to 30, stopped answering, and then applied a backlog thirty
-    # seconds later — a volume control that ignores you and then moves on its own is worse
-    # than a slow one. Roughly three a second is what this set keeps up with, which was
-    # accidentally the old rate back when each step cost two `cec-ctl` invocations. Making
-    # that cheaper is what exposed the real limit, which was never ours.
-    VOLUME_STEP = 0.30
 
 
     # ---------- tuning ----------
@@ -534,65 +545,84 @@ class Box:
         self._volume_seq += 1
 
     def _volume_worker(self) -> None:
-        """Send one complete key event per step, repeating while the button is held.
+        """Send volume to the television: a tap is one key event, a hold is a run of them.
 
-        This is the third shape this took and the first that matches the television. A held
-        CEC press is *allowed* to make a follower ramp on its own, and this set does not: it
-        steps once per completed press-and-release and ignores the rest. So a hold is simply
-        the same key event repeated, as fast as the bus manages — measured at 6.4 a second,
-        which is the whole ceiling and is `cec-ctl`'s startup cost rather than the wire.
+        A hold sends bare `<User Control Pressed>` as fast as the bus carries them and one
+        `<User Control Released>` at the end. That is the specification's idiom for a held
+        key, and here it is also the only way to get a usable ramp: a press costs 91ms on
+        the wire and a press-with-release 155ms, and HDMI-CEC is a ~400 bit/s bus, so those
+        numbers are physics rather than implementation. Talking to /dev/cec0 directly by
+        ioctl was measured and is no faster; the tool was never the bottleneck.
 
-        Polled rather than woken by an Event. Every bug in this path was a race between
-        setting that flag and clearing it: a press arriving in the window between the worker
-        deciding it had finished and going back to sleep was lost, which is what "you cannot
-        go up straight after going down" was. A 20ms poll of a plain attribute has no such
-        window and costs nothing worth measuring.
+        The window is small and not ours to choose. The remote is an ELAN presenter whose
+        dongle releases the key after about 700-900ms whether or not a thumb is still on it,
+        confirmed twice against deliberate five-second holds. Nothing here extrapolates past
+        that: when the remote stops saying the button is down, this stops. It just fills the
+        window it is given at eleven steps a second instead of three.
 
-        Nothing is left held on the bus by construction — every message this sends is a
-        complete press *and* release — which is why there is no release bookkeeping here.
+        `wire` is the key believed to be down on the bus, and it must be released before any
+        other is pressed — a press left hanging has the set repeating it on its own.
         """
+        wire: str | None = None
+
+        def release(reason: str) -> None:
+            nonlocal wire
+            if wire is None:
+                return
+            try:
+                self._volume("release", wire)
+                if VOLUME_TRACE:
+                    print(f"  vol: -> release ({reason})", flush=True)
+            except Exception:  # noqa: BLE001
+                pass
+            wire = None
+
         while self.running:
             ui_cmd = self._volume_cmd
             if ui_cmd is None:
+                release("idle")
                 time.sleep(0.02)
                 continue
 
             holding = self._volume_holding
-            # Asked before sending, not after. Checking afterwards meant every release still
-            # paid for the message already in flight *plus* however many more fitted into the
-            # gap — three steps of volume moving on its own after the thumb came off.
             if holding and time.monotonic() - self._volume_seen > self.VOLUME_HOLD_GAP:
-                self._volume_cmd = None
-                self._volume_holding = False
+                # Sequence-guarded, because ending a hold is not instant: the release is
+                # about 90ms on the wire, and a press arriving during it would be recorded
+                # and then wiped by the tidy-up below. That is a ~90ms hole at the end of
+                # every hold, and reversing direction is exactly the thing that lands in it —
+                # "it works if I wait, but not if I go the other way straight after".
+                #
+                # The tap path was guarded against this and this branch was not.
+                seq = self._volume_seq
+                release("button up")
+                if self._volume_seq == seq:
+                    self._volume_cmd = None
+                    self._volume_holding = False
                 continue
 
-            seq = self._volume_seq
             try:
+                if wire is not None and wire != ui_cmd:
+                    release("direction changed")
+                seq = self._volume_seq
                 started = time.monotonic()
-                self._volume("tap", ui_cmd)
+                self._volume("press" if holding else "tap", ui_cmd)
+                wire = ui_cmd if holding else None
                 if VOLUME_TRACE:
-                    print(f"  vol: -> {ui_cmd}{' (held)' if holding else ''} in "
+                    print(f"  vol: -> {'press' if holding else 'tap'} {ui_cmd} in "
                           f"{(time.monotonic() - started) * 1000:.0f}ms", flush=True)
             except Exception as exc:  # noqa: BLE001 - a silent set is not fatal
                 if VOLUME_TRACE:
                     print(f"  vol: -> {ui_cmd} RAISED {exc}", flush=True)
                 self._volume_cmd = None
                 self._volume_holding = False
+                wire = None
                 continue
-
-            # Pace to what the set can swallow. `cec-ctl` already costs most of this, so on
-            # a healthy bus the wait is short; it matters when the transmit comes back fast.
-            spent = time.monotonic() - started
-            if holding and spent < self.VOLUME_STEP:
-                time.sleep(self.VOLUME_STEP - spent)
 
             if not holding:
-                # A tap is one step — unless the first repeat landed while that message was
-                # on the wire, in which case the button is still down and this is a hold.
+                # A tap is one step — unless the first repeat landed while it was in flight,
+                # in which case the button is still down and this becomes a hold.
                 if self._volume_seq == seq:
                     self._volume_cmd = None
-                continue
-
 
     # ---------- the way back ----------
 
