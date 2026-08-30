@@ -26,6 +26,7 @@ passed through at speed is a file nobody is going to watch.
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from collections import deque
@@ -35,6 +36,12 @@ from pathlib import Path
 from typing import Callable
 
 from .input import Driver, Event, Verb
+
+# Set TUB3_VOLUME_TRACE=1 to log every volume key from arrival to the wire. Volume is the one
+# path where the interesting failures are about *rate* — dropped repeats, a bus falling
+# behind, a set that stops answering partway through a hold — and none of those are visible
+# in a still picture of the code.
+VOLUME_TRACE = bool(os.environ.get("TUB3_VOLUME_TRACE"))
 from .menu import Menu, build_root
 from .player import MpvPlayer
 from .schedule import Airing, Lineup
@@ -133,6 +140,7 @@ class Box:
         rescan: Callable[[], list] | None = None,
         power: Callable[[bool], None] | None = None,
         volume: Callable[[str], None] | None = None,
+        tv_state: Callable[[], str] | None = None,
     ):
         self.lineup = lineup
         self._rescan_for = rescan
@@ -140,19 +148,31 @@ class Box:
         # Injected rather than imported, so `tuner` keeps not depending on `tub3`. Takes one
         # argument: whether the television should now be on.
         self._power = power
+        # Whether the television is on, as the television sees it. Injected for the same
+        # reason as the others: `tuner` does not import `tub3`.
+        self._tv_state = tv_state
         # Same arrangement for volume, which is the television's to set and not the player's.
         # Takes a CEC ui-cmd name.
         self._volume = volume
-        # Volume keys go out on their own thread. Each one is two `cec-ctl` invocations and
-        # the better part of 70ms of waiting on a television, and the input thread cannot pay
-        # that — a held button autorepeats far faster than the bus can answer. The queue is
-        # shallow on purpose: when the bus falls behind, dropping presses keeps the dial and
-        # the menu responsive, where queueing them would have the volume still crawling
-        # upward seconds after the thumb came off.
-        self._volume_q: deque[str] = deque(maxlen=4)
-        self._volume_wake = threading.Event()
+        # Volume goes out on its own thread, because a `cec-ctl` invocation costs about
+        # 150ms and the input thread cannot wait on a television.
+        #
+        # Not a queue of presses, which is what this was and why holding barely worked. The
+        # remote autorepeats at roughly 20/s; a queue of individual press-and-release pairs
+        # could retire about three of those a second, so the ramp crawled and then kept
+        # crawling after the thumb came off. What is kept instead is the *latest intent* and
+        # when it was last heard — the worker repeats it at whatever rate the bus manages,
+        # and stops when the repeats stop arriving. Overshoot is then one message, not a
+        # backlog, and the ramp speed is the bus's rather than the remote's.
+        self._volume_cmd: str | None = None
+        self._volume_seen = 0.0
+        self._volume_holding = False
+        self._volume_seq = 0
         self.asleep = False
         self._power_pending = False
+        # Set when a power press should consult the set before deciding. Cleared once the run
+        # loop has done so.
+        self._power_query = False
         # The last few presses, as (verb, when, channel-before-it-was-acted-on), for matching
         # the unlock code against. Bounded by the code's own length, so it costs one tuple per
         # press and never grows.
@@ -240,6 +260,25 @@ class Box:
     # Long enough to be typed deliberately at a dark screen, short enough that six presses
     # spread across an evening's surfing never accumulate into it.
     UNLOCK_GAP = 2.5
+
+    # Silence that means the volume button came up. Repeats arrive about 40ms apart once a
+    # hold is under way — the 250ms gap before the *first* one is the kernel's initial delay,
+    # and it is not paid here because a hold is only entered once that first repeat lands.
+    # So this needs to clear 40ms comfortably and nothing more: every millisecond of slack is
+    # volume that keeps moving after the button is up.
+    VOLUME_HOLD_GAP = 0.12
+
+    # Minimum time between key events while a button is held, and it exists because the
+    # television has a queue.
+    #
+    # The bus will carry about 6.4 a second and the set will not absorb them: fed at that
+    # rate it took the volume to 30, stopped answering, and then applied a backlog thirty
+    # seconds later — a volume control that ignores you and then moves on its own is worse
+    # than a slow one. Roughly three a second is what this set keeps up with, which was
+    # accidentally the old rate back when each step cost two `cec-ctl` invocations. Making
+    # that cheaper is what exposed the real limit, which was never ours.
+    VOLUME_STEP = 0.30
+
 
     # ---------- tuning ----------
 
@@ -467,8 +506,8 @@ class Box:
 
     # ---------- volume ----------
 
-    def _send_volume(self, ui_cmd: str, fallback: int | None) -> None:
-        """Queue a volume key for the television, or move the player if there is no bus.
+    def _send_volume(self, ui_cmd: str, fallback: int | None, repeat: bool = False) -> None:
+        """Record what the volume button currently wants; the worker does the talking.
 
         Called on the input thread holding the lock, so it does nothing that waits. The
         fallback exists for `--windowed` on a desktop, where there is no CEC device and
@@ -480,24 +519,80 @@ class Box:
             else:
                 self.player.nudge_volume(fallback)
             return
-        self._volume_q.append(ui_cmd)
-        self._volume_wake.set()
+        if VOLUME_TRACE:
+            print(f"  vol: <- {ui_cmd}{' (held)' if repeat else ''}", flush=True)
+        self._volume_cmd = ui_cmd
+        self._volume_seen = time.monotonic()
+        # A fresh key-down is a tap until its own repeats say otherwise — which is also what
+        # makes changing direction mid-hold work: pressing up while down was held arrives as
+        # a key-down, so the hold ends rather than silently continuing in the new direction.
+        self._volume_holding = bool(repeat)
+        # Bumped on every press so the worker can tell "nothing has happened since I started
+        # this message" from "the viewer has moved on". Clearing state without that check is
+        # what made volume-up dead after a volume-down hold: the trailing release takes about
+        # 150ms, and the up pressed during it was wiped by the worker tidying up after down.
+        self._volume_seq += 1
 
     def _volume_worker(self) -> None:
-        """Drain volume keys onto the bus, one at a time, off the input path."""
+        """Send one complete key event per step, repeating while the button is held.
+
+        This is the third shape this took and the first that matches the television. A held
+        CEC press is *allowed* to make a follower ramp on its own, and this set does not: it
+        steps once per completed press-and-release and ignores the rest. So a hold is simply
+        the same key event repeated, as fast as the bus manages — measured at 6.4 a second,
+        which is the whole ceiling and is `cec-ctl`'s startup cost rather than the wire.
+
+        Polled rather than woken by an Event. Every bug in this path was a race between
+        setting that flag and clearing it: a press arriving in the window between the worker
+        deciding it had finished and going back to sleep was lost, which is what "you cannot
+        go up straight after going down" was. A 20ms poll of a plain attribute has no such
+        window and costs nothing worth measuring.
+
+        Nothing is left held on the bus by construction — every message this sends is a
+        complete press *and* release — which is why there is no release bookkeeping here.
+        """
         while self.running:
-            if not self._volume_wake.wait(timeout=0.5):
+            ui_cmd = self._volume_cmd
+            if ui_cmd is None:
+                time.sleep(0.02)
                 continue
-            self._volume_wake.clear()
-            while self._volume_q:
-                try:
-                    ui_cmd = self._volume_q.popleft()
-                except IndexError:
-                    break
-                try:
-                    self._volume(ui_cmd)
-                except Exception:  # noqa: BLE001 - a television that will not answer is not fatal
-                    pass
+
+            holding = self._volume_holding
+            # Asked before sending, not after. Checking afterwards meant every release still
+            # paid for the message already in flight *plus* however many more fitted into the
+            # gap — three steps of volume moving on its own after the thumb came off.
+            if holding and time.monotonic() - self._volume_seen > self.VOLUME_HOLD_GAP:
+                self._volume_cmd = None
+                self._volume_holding = False
+                continue
+
+            seq = self._volume_seq
+            try:
+                started = time.monotonic()
+                self._volume("tap", ui_cmd)
+                if VOLUME_TRACE:
+                    print(f"  vol: -> {ui_cmd}{' (held)' if holding else ''} in "
+                          f"{(time.monotonic() - started) * 1000:.0f}ms", flush=True)
+            except Exception as exc:  # noqa: BLE001 - a silent set is not fatal
+                if VOLUME_TRACE:
+                    print(f"  vol: -> {ui_cmd} RAISED {exc}", flush=True)
+                self._volume_cmd = None
+                self._volume_holding = False
+                continue
+
+            # Pace to what the set can swallow. `cec-ctl` already costs most of this, so on
+            # a healthy bus the wait is short; it matters when the transmit comes back fast.
+            spent = time.monotonic() - started
+            if holding and spent < self.VOLUME_STEP:
+                time.sleep(self.VOLUME_STEP - spent)
+
+            if not holding:
+                # A tap is one step — unless the first repeat landed while that message was
+                # on the wire, in which case the button is still down and this is a hold.
+                if self._volume_seq == seq:
+                    self._volume_cmd = None
+                continue
+
 
     # ---------- the way back ----------
 
@@ -700,7 +795,36 @@ class Box:
         self.tune(self.channel)
 
     def _apply_power(self) -> None:
-        """The slow half: the television itself."""
+        """The slow half: the television itself.
+
+        When the press came from the remote the direction is not decided yet — `_power_query`
+        says to ask the set first, because the box being awake tells you nothing about
+        whether there is a picture. Somebody can switch the television off with its own
+        remote, or the Apple TV can take the input, and the tuner carries on regardless. In
+        that state the only useful thing a power press can do is bring the picture back;
+        toggling our own state would put a working tuner to sleep and leave the screen just
+        as dark.
+
+        Asking costs a round trip — measured at 34ms to this set — which is why it happens
+        here and not under the thumb. It is only paid when the box is already awake, and in
+        that case the screen the delay would have blanked is the one being asked about.
+        """
+        if self._power_query:
+            self._power_query = False
+            state = self._television_state()
+            if state == "standby":
+                # The set is off and the tuner is not. Wake the picture and leave everything
+                # else exactly as it is — there is nothing to un-sleep.
+                print("  power: the set is in standby — waking it, tuner stays up")
+                self._wake_now()
+                return
+            # On, or refusing to answer. Unknown lands here deliberately: a set that will not
+            # answer is far more often on than in standby, and guessing standby would make
+            # the button appear dead at precisely the moment somebody wants the room quiet.
+            print(f"  power: the set reports {state} — sending both to standby")
+            self.toggle_power()
+            return
+
         if self._power is not None:
             try:
                 self._power(not self.asleep)
@@ -712,6 +836,15 @@ class Box:
         # shortcut — nothing is showing, whatever the bookkeeping last recorded.
         self._on_air = None
         self.tune(self.channel)
+
+    def _television_state(self) -> str:
+        """"on", "standby", or "unknown" — whatever the set will admit to."""
+        if self._tv_state is None:
+            return "unknown"
+        try:
+            return self._tv_state() or "unknown"
+        except Exception:  # noqa: BLE001 - an unanswerable set is not fatal
+            return "unknown"
 
     def _wake_now(self) -> None:
         """Wake the television without touching the box's own power state.
@@ -844,7 +977,20 @@ class Box:
                 return
 
             if event.verb is Verb.POWER:
-                self.toggle_power()
+                # Which way this goes is the television's to answer, not ours. The box can be
+                # wide awake with the set switched off or on another input — somebody used
+                # the TV remote, or the Apple TV took it — and in that state the only useful
+                # thing a long press can do is bring the picture back. Toggling our own state
+                # would put a working tuner to sleep and leave the screen exactly as dark.
+                #
+                # Asking costs a CEC round trip, so the run loop does it.
+                if self.asleep:
+                    # Nothing to ask: the box is off, so the press means wake, and the
+                    # answer is the same whatever the set says.
+                    self.toggle_power()
+                else:
+                    self._power_query = True
+                    self._power_pending = True
                 return
 
             if event.verb is Verb.DIGIT and event.digit is not None:
@@ -873,10 +1019,10 @@ class Box:
             # the four verbs — nothing depends on it — but a television without volume on the
             # remote is a television people complain about.
             if event.verb is Verb.VOLUME_UP:
-                self._send_volume("volume-up", +5)
+                self._send_volume("volume-up", +5, event.repeat)
                 return
             if event.verb is Verb.VOLUME_DOWN:
-                self._send_volume("volume-down", -5)
+                self._send_volume("volume-down", -5, event.repeat)
                 return
             if event.verb is Verb.MUTE:
                 self._send_volume("mute", None)

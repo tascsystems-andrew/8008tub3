@@ -42,6 +42,8 @@ scancode: it drives its diode in hardware, so it can never be a button.
 
 from __future__ import annotations
 
+import os
+
 import re
 import sys
 from dataclasses import dataclass
@@ -67,6 +69,11 @@ class Event:
     verb: Verb
     digit: int | None = None
     source: str = "unknown"
+    # True when this came from a held button rather than a fresh press. Only volume repeats
+    # at all (see EVDEV_REPEATS), and only volume cares — but the distinction has to survive
+    # the trip, because a tap and a hold are different CEC conversations: a tap is one
+    # press-and-release, a hold is one press repeated and released once at the end.
+    repeat: bool = False
 
 
 # Linux input-event key codes (linux/input-event-codes.h), used by the evdev driver.
@@ -116,17 +123,39 @@ EVDEV_MODIFIERS: dict[int, str] = {
     42: "shift", 54: "shift",     # LEFTSHIFT, RIGHTSHIFT
     56: "alt", 100: "alt",        # LEFTALT, RIGHTALT
     29: "ctrl", 97: "ctrl",       # LEFTCTRL, RIGHTCTRL
+    125: "meta", 126: "meta",     # LEFTMETA, RIGHTMETA
 }
 
 # (modifier, keycode) -> verb. Consulted only when a modifier arrived immediately before, and
 # it wins over EVDEV_MAP for that one press.
 EVDEV_CHORDS: dict[tuple[str, int], Verb] = {
-    ("alt", 15): Verb.POWER,      # ALT + TAB — long press of the top button on the Elan
+    # META + TAB is what the Elan actually sends for a long press of the top button.
+    # Captured from the device:
+    #
+    #     code=125 down   (LEFTMETA)
+    #     code=15  down   (TAB)
+    #     code=15  up
+    #     code=125 up
+    #
+    # This was recorded as ALT + TAB, and 125 was in no modifier map, so the chord could
+    # never form — the modifier went unrecognised and TAB fell through to its ordinary
+    # meaning. A long press opened the menu, which is precisely what a short press does, and
+    # made it look as though long-press support had never been wired up at all.
+    ("meta", 15): Verb.POWER,
+    # Kept because it costs nothing and other remotes in this family do send it.
+    ("alt", 15): Verb.POWER,
 }
 
 # A safety net, not the mechanism. The modifier is cleared when its own key-up arrives; this
 # only bounds how long a *lost* release can go on colouring the next press.
 CHORD_HOLD = 5.0
+
+# The only keys allowed to autorepeat. Everything else takes key-down and nothing else, so a
+# slightly-too-long press cannot spray the dial or reopen a menu — but volume is the one verb
+# where holding is the whole interaction, and every television ever made ramps on a held
+# button. Mute is deliberately absent: nobody holds mute, and repeating a toggle would just
+# flutter it.
+EVDEV_REPEATS = frozenset({115, 114})
 
 # CEC user-control codes (HDMI CEC spec, UI Command). The TV's own remote lands here.
 CEC_MAP: dict[int, Verb] = {
@@ -195,6 +224,10 @@ class EvdevDriver(Driver):
             # Modifiers are tracked across their whole press, so key-up matters here where it
             # matters nowhere else.
             if code in EVDEV_MODIFIERS:
+                if os.environ.get("TUB3_VOLUME_TRACE"):
+                    print(f"  key: {self.device_path} code={code} "
+                          f"{ {0:'up',1:'down',2:'REPEAT'}.get(value,'?') } MODIFIER "
+                          f"{EVDEV_MODIFIERS[code]}", flush=True)
                 if value == 1:
                     if modifier is None:
                         modifier_at = time.monotonic()
@@ -205,11 +238,19 @@ class EvdevDriver(Driver):
                     chord_fired = False
                 continue
 
-            # Key-*down* specifically. value 2 is the kernel's autorepeat, which is what a
-            # held button produces, and dropping it is what makes a long press do exactly what
-            # a short press does — once. It is easy to "fix" by accepting repeats and thereby
-            # make a slightly-too-long press spray the dial.
-            if value != 1:
+            # Key-*down*, plus autorepeat for the few keys that want it. value 2 is the
+            # kernel's repeat, which is what a held button produces. Dropping it wholesale is
+            # what made a long press do exactly what a short press does — once — and accepting
+            # it wholesale is how a slightly-too-long press sprays the dial. So it is allowed
+            # per key, and `EVDEV_REPEATS` is the short list where holding is the point.
+            if os.environ.get("TUB3_VOLUME_TRACE"):
+                kind = {0: "up", 1: "down", 2: "REPEAT"}.get(value, str(value))
+                print(f"  key: {self.device_path} code={code} {kind}"
+                      f"{'  [modifier]' if code in EVDEV_MODIFIERS else ''}", flush=True)
+            if value == 2:
+                if code not in EVDEV_REPEATS:
+                    continue
+            elif value != 1:
                 continue
 
             live = modifier is not None and time.monotonic() - modifier_at < CHORD_HOLD
@@ -229,7 +270,7 @@ class EvdevDriver(Driver):
             if code in EVDEV_DIGITS:
                 yield Event(Verb.DIGIT, digit=EVDEV_DIGITS[code], source=self.name)
             elif code in EVDEV_MAP:
-                yield Event(EVDEV_MAP[code], source=self.name)
+                yield Event(EVDEV_MAP[code], source=self.name, repeat=value == 2)
 
     def close(self) -> None:
         if self._file:
