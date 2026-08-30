@@ -158,6 +158,25 @@ class Tub3Catalog(ShowCatalog):
                 episode if episode is not None else 9999,
                 entry.path)
 
+    @staticmethod
+    def _continues(first, second) -> bool:
+        """Is `second` the other half of a two-parter beginning at `first`?
+
+        The one case where the same series back to back is right rather than lazy. Matched on
+        the episode title, which is where broadcasters put it: `Part 1` / `Part 2`, or a bare
+        `(1)` / `(2)`. Both halves must say so and the numbers must run consecutively, so a
+        title merely containing the word "part" does not bind anything.
+        """
+        import re as _re
+
+        def part(entry):
+            name = Path(entry.path).name
+            match = _re.search(r"(?:part\s*|\()(\d)\)?(?:\s|\.|$)", name, _re.I)
+            return int(match.group(1)) if match else None
+
+        one, two = part(first), part(second)
+        return one is not None and two == one + 1
+
     def _ring(self, tag: str, mode: str) -> Ring | None:
         """Lay a tag's episodes out in order, once, and keep it.
 
@@ -198,13 +217,46 @@ class Tub3Catalog(ShowCatalog):
             # and neither ever bunches. Ties break on the series name so the layout is
             # deterministic, and episodes within a series keep their order because their
             # positions increase with their index.
-            placed = []
+            # Never the same series twice running, unless it is a two-parter.
+            #
+            # Spreading each series proportionally across the cycle reduces clustering and
+            # does not prevent it: a series holding a large share still lands beside itself
+            # sometimes, which is how BBC Two came to show two Escapes to the Country in a
+            # row. What actually prevents it is refusing to pick the series just picked.
+            #
+            # So: bind two-parters into single units, then repeatedly take the series with
+            # the most left that is *not* the one just aired. Taking the largest remaining
+            # keeps the spacing even — a series with twice the episodes comes round twice as
+            # often — and excluding the last one makes adjacency impossible whenever it is
+            # mathematically possible at all. It is only impossible if one series holds more
+            # than half the slot, and then the pigeonhole leaves no choice; the build says so
+            # rather than pretending otherwise.
+            units: dict[str, list[list]] = {}
             for name in names:
-                episodes = series[name]
-                for index, episode in enumerate(episodes):
-                    placed.append(((index + 0.5) / len(episodes), name, episode))
-            placed.sort(key=lambda item: (item[0], item[1]))
-            order = [episode for _, _, episode in placed]
+                episodes, index = series[name], 0
+                while index < len(episodes):
+                    unit = [episodes[index]]
+                    while (index + 1 < len(episodes)
+                           and self._continues(episodes[index], episodes[index + 1])):
+                        index += 1
+                        unit.append(episodes[index])
+                    units.setdefault(name, []).append(unit)
+                    index += 1
+
+            remaining = {name: list(reversed(chunks)) for name, chunks in units.items()}
+            order, last, forced = [], None, 0
+            while any(remaining.values()):
+                options = [n for n, left in remaining.items() if left and n != last]
+                if not options:
+                    # Only the series just aired has anything left.
+                    options = [n for n, left in remaining.items() if left]
+                    forced += 1
+                pick = max(options, key=lambda n: (len(remaining[n]), n))
+                order.extend(remaining[pick].pop())
+                last = pick
+            if forced:
+                print(f"    order: {tag} — {forced} unavoidable repeat(s); one series holds "
+                      f"more than half the slot")
 
         # A span is the block the episode will actually occupy: its duration rounded up to
         # the grid, which is exactly how upstream sizes a block. Using the same arithmetic is
