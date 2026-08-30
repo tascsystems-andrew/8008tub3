@@ -195,28 +195,45 @@ def audio_system_present(timeout: float = 3.0) -> bool:
     return code == 0 and "Not Acknowledged" not in out
 
 
-def send_key(ui_cmd: str, to: str = TV_ADDRESS, timeout: float = 4.0) -> bool:
-    """One complete key event: pressed, then released, in a single `cec-ctl` invocation.
+def _key(args: list[str], timeout: float) -> bool:
+    if not Path(CEC_DEVICE).exists() or not shutil.which("cec-ctl"):
+        return False
+    code, out = _run(["cec-ctl", "-d", CEC_DEVICE] + args, timeout=timeout)
+    # An unconfigured adapter makes `cec-ctl` exit 0 having transmitted nothing at all, so a
+    # zero return code is not evidence on its own. Requiring the message to be named in the
+    # output is what tells a real send from a silent no-op.
+    return code == 0 and "Not Acknowledged" not in out and "USER_CONTROL" in out
 
-    Both messages in one call because the cost here is not the transmit — it is `cec-ctl`
-    itself, which takes about 150ms to open the device and read its configuration whatever
-    you ask of it. Measured on this box: one invocation carrying both messages is 155ms,
-    two invocations are 158ms. The transmit is nearly free; the tool is not.
 
-    A press-and-release pair, rather than a held press, because this television steps once
-    per completed key event and does not ramp on its own. The specification allows a follower
-    to repeat while a key is held, and some sets do — but a keepalive design that assumed it
-    produced three steps and a stall here, which is worse than useless on a volume control.
+def press_key(ui_cmd: str, to: str = TV_ADDRESS, timeout: float = 4.0) -> bool:
+    """`<User Control Pressed>` alone — one step of a hold.
+
+    Measured at 91ms against this bus, where a press carrying its release costs 155ms. That
+    difference is the entire ramp speed: HDMI-CEC runs at roughly 400 bits per second, so a
+    three-byte message genuinely takes a tenth of a second on the wire and no implementation
+    can beat it. Sending the release only once, at the end, is both what the specification
+    describes for a held key and what nearly doubles the rate.
+    """
+    return _key(["--to", to, "--user-control-pressed", f"ui-cmd={ui_cmd}"], timeout)
+
+
+def release_key(to: str = TV_ADDRESS, timeout: float = 4.0) -> bool:
+    """`<User Control Released>`, which ends a hold and must not be skipped.
+
+    A press left unreleased leaves the television repeating the key on its own — the CEC
+    equivalent of a stuck button — until it times the source out.
     """
     if not Path(CEC_DEVICE).exists() or not shutil.which("cec-ctl"):
         return False
-    code, out = _run(["cec-ctl", "-d", CEC_DEVICE, "--to", to,
-                      "--user-control-pressed", f"ui-cmd={ui_cmd}",
-                      "--user-control-released"], timeout=timeout)
-    # An unconfigured adapter makes `cec-ctl` exit 0 having transmitted nothing at all, so a
-    # zero return code is not evidence of anything on its own. Requiring the transmit to be
-    # named in the output is what tells a real send from a silent no-op.
-    return code == 0 and "Not Acknowledged" not in out and "USER_CONTROL_PRESSED" in out
+    code, _ = _run(["cec-ctl", "-d", CEC_DEVICE, "--to", to,
+                    "--user-control-released"], timeout=timeout)
+    return code == 0
+
+
+def send_key(ui_cmd: str, to: str = TV_ADDRESS, timeout: float = 4.0) -> bool:
+    """A single tap: pressed and released, in one invocation."""
+    return _key(["--to", to, "--user-control-pressed", f"ui-cmd={ui_cmd}",
+                 "--user-control-released"], timeout)
 
 
 def tv_off() -> bool:

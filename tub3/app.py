@@ -534,7 +534,11 @@ def main(argv: list[str] | None = None) -> int:
             volume_target = (cec.AUDIO_ADDRESS if cec.audio_system_present()
                              else cec.TV_ADDRESS)
         try:
-            if not cec.send_key(ui_cmd, to=volume_target):
+            if action == "release":
+                cec.release_key(to=volume_target)
+            elif action == "press":
+                cec.press_key(ui_cmd, to=volume_target)
+            elif not cec.send_key(ui_cmd, to=volume_target):
                 print(f"  cec: volume {ui_cmd} not acknowledged")
         except Exception as exc:  # noqa: BLE001
             print(f"  cec: volume {ui_cmd} raised {exc}")
