@@ -183,11 +183,28 @@ class Tub3Catalog(ShowCatalog):
         if mode == "marathon":
             order = [episode for name in names for episode in series[name]]
         else:
-            order = []
-            for index in range(max(len(v) for v in series.values())):
-                for name in names:
-                    if index < len(series[name]):
-                        order.append(series[name][index])
+            # Spread each series evenly across the whole cycle, rather than taking one from
+            # each in turn.
+            #
+            # Round-robin by index looks like the obvious way to interleave and is wrong at
+            # the end: the short series run out first, so the tail is whatever series is
+            # longest, alone. Measured on channel 9, whose travel pool is 79 episodes of
+            # Drive to Survive against a single Bourdain — the last 37 entries were an
+            # unbroken Formula 1 marathon, and the schedule landed in it.
+            #
+            # Placing each episode at its fractional position within its own series and
+            # sorting on that gives every series a share of the cycle proportional to its
+            # size, evenly distributed. A big series comes round often, a small one rarely,
+            # and neither ever bunches. Ties break on the series name so the layout is
+            # deterministic, and episodes within a series keep their order because their
+            # positions increase with their index.
+            placed = []
+            for name in names:
+                episodes = series[name]
+                for index, episode in enumerate(episodes):
+                    placed.append(((index + 0.5) / len(episodes), name, episode))
+            placed.sort(key=lambda item: (item[0], item[1]))
+            order = [episode for _, _, episode in placed]
 
         # A span is the block the episode will actually occupy: its duration rounded up to
         # the grid, which is exactly how upstream sizes a block. Using the same arithmetic is
