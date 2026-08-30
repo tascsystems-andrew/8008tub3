@@ -323,8 +323,35 @@ def probe(gap: float = 1.2) -> dict:
                      "CEC line in standby, which no software can work around."}
 
 
+def await_on(timeout: float = 8.0, poll: float = 0.6) -> bool:
+    """Wait until the set says it is on, or give up.
+
+    A television coming out of standby answers CEC long before it will act on it. Asking
+    rather than guessing is the difference between an input switch that lands and one the
+    set drops while its panel is still warming.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        state, _ = power_status(timeout=3.0)
+        if state == "on":
+            return True
+        time.sleep(poll)
+    return False
+
+
 def wake() -> bool:
-    """Turn the TV on using whatever was found to work. Keypress-driven only."""
+    """Turn the TV on and take the input. Keypress-driven only.
+
+    The input half is the part that used to go missing. The wake and the input switch are two
+    separate messages, and the second was sent a fixed 1.2s after the first — which is plenty
+    for a set that is already awake and not nearly enough for one coming out of standby, so
+    the television came on and stayed on whatever it was showing before.
+
+    So Active Source now waits for the set to *report* itself on rather than counting
+    seconds, and is sent again afterwards. The repeat is free — Active Source is a broadcast
+    announcement, not a request, and a set that already agrees ignores it — and it covers the
+    case where the first one lands during the last moment of warm-up and is discarded.
+    """
     config = load()
     key = config.get("wake")
     if not key:
@@ -333,9 +360,15 @@ def wake() -> bool:
     strategy = next((s for s in WAKE_STRATEGIES if s["key"] == key), WAKE_STRATEGIES[0])
     gap = float(config.get("gap", 1.2))
     for step in strategy["steps"]:
+        if step == "active-source":
+            # Do not announce the source to a set that is not listening yet.
+            await_on(timeout=float(config.get("wake_timeout", 8.0)))
         if not send(step).ok:
             return False
         time.sleep(gap)
+
+    # Say it once more. Cheap, harmless, and the difference on a slow panel.
+    send("active-source")
     return True
 
 
