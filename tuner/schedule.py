@@ -27,6 +27,7 @@ Both answer one question, which is the only question the tuner ever asks:
 from __future__ import annotations
 
 import bisect
+import os
 from bisect import bisect_right
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -353,6 +354,10 @@ class LiquidChannel(Channel):
         self._starts: list[float] = []
         self._loaded_from: float = 0.0
         self._loaded_to: float = 0.0
+        # The schedule file's modification time when this window was read, and when it was
+        # last compared. Together they answer "is what I am holding still true?".
+        self._loaded_mtime: float = 0.0
+        self._checked_at: float = 0.0
 
     # ---------- loading ----------
 
@@ -368,6 +373,13 @@ class LiquidChannel(Channel):
         # silently selects the wrong rows rather than failing.
         lo = datetime.fromtimestamp(start)
         hi = datetime.fromtimestamp(end)
+
+        # Read before the query, not after: a build finishing mid-read would otherwise be
+        # recorded as already seen, and the stale window would survive another six hours.
+        try:
+            self._loaded_mtime = os.path.getmtime(self.db_path)
+        except OSError:
+            self._loaded_mtime = 0.0
 
         conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)
         try:
@@ -452,8 +464,35 @@ class LiquidChannel(Channel):
             off_air=True,
         )
 
+    # How often the schedule file is checked for having been rewritten underneath us. One
+    # `stat` is cheap, but `now` is called on every tick, and the builder takes minutes — so
+    # a second's granularity is far finer than the thing being detected.
+    FRESHNESS_CHECK = 1.0
+
+    def _stale(self, at: float) -> bool:
+        """Has the schedule been rewritten since this window was read?
+
+        The window is six hours wide and the top-up runs every six hours, so a rebuild lands
+        *inside* the cached window as a matter of course. Without this the tuner keeps
+        playing a schedule that no longer exists until the clock walks out of the window —
+        for up to six hours, while the guide reads the database live and shows the new one.
+        Observed exactly that way: channel 9 announced as Departures and airing Drive to
+        Survive, five hours after the rebuild that changed it.
+        """
+        if not self._loaded_to:
+            return True
+        if at - self._checked_at < self.FRESHNESS_CHECK:
+            return False
+        self._checked_at = at
+        try:
+            written = os.path.getmtime(self.db_path)
+        except OSError:
+            return False
+        return written > self._loaded_mtime
+
     def now(self, at: float) -> Airing | None:
-        if not self._blocks or not (self._loaded_from <= at < self._loaded_to):
+        if (not self._blocks or not (self._loaded_from <= at < self._loaded_to)
+                or self._stale(at)):
             self._load(at)
         if not self._blocks:
             return self._off_air(at)
@@ -523,6 +562,7 @@ class LiquidChannel(Channel):
     def invalidate(self) -> None:
         self._blocks = []
         self._loaded_from = self._loaded_to = 0.0
+        self._loaded_mtime = self._checked_at = 0.0
 
 
 @dataclass
