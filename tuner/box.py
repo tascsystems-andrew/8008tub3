@@ -36,15 +36,15 @@ from pathlib import Path
 from typing import Callable
 
 from .input import Driver, Event, Verb
+from .menu import Menu, build_root
+from .player import MpvPlayer
+from .schedule import Airing, Lineup
 
 # Set TUB3_VOLUME_TRACE=1 to log every volume key from arrival to the wire. Volume is the one
 # path where the interesting failures are about *rate* — dropped repeats, a bus falling
 # behind, a set that stops answering partway through a hold — and none of those are visible
 # in a still picture of the code.
 VOLUME_TRACE = bool(os.environ.get("TUB3_VOLUME_TRACE"))
-from .menu import Menu, build_root
-from .player import MpvPlayer
-from .schedule import Airing, Lineup
 
 
 class Mode(Enum):
@@ -101,6 +101,33 @@ def render_bug(airing: Airing) -> str:
     ) + r"\N".join(lines)
 
     return channel + "\n" + info
+
+
+def render_menu_now(airing: Airing) -> str:
+    """One line under the menu saying what is still playing behind it.
+
+    The menu covers the picture, so opening it used to mean losing track of what you were
+    watching — which matters most in the one place you would want to know, the channel list.
+    The bug cannot simply be left up: it sits top-right and bottom-right, where the panel is,
+    and it fades after four seconds anyway.
+
+    So this is its own strip, in the margin below the panel (which ends at y=960), and it
+    does not fade — while the menu is open, what is on stays on.
+    """
+    from .titles import describe
+
+    show, detail = describe(airing.feature_path)
+    minutes = int(airing.programme_remaining // 60)
+    parts = [f"CH {airing.channel:02d}", airing.channel_name, show]
+    if detail:
+        parts.append(detail)
+    parts.append(f"{minutes} min left" if minutes else "ending")
+    # Braces and backslashes are ASS control characters, and an episode title is user data.
+    body = "   ·   ".join(parts).replace("{", "(").replace("}", ")").replace("\\", "/")
+    return (
+        r"{\an2\pos(960,1024)\fnMonospace\fs30\b0\bord0\shad3"
+        r"\4c&H000000&\1c&H55FF33&}" + body
+    )
 
 
 def render_tuning(label: str, name: str = "") -> str:
@@ -958,6 +985,20 @@ class Box:
     def _redraw(self) -> None:
         if self.mode is Mode.MENU and self.menu.visible:
             self.player.show_overlay(self.menu.render_ass(), overlay_id=1)
+            # What is playing behind the panel. Looked up rather than taken from `self.bug`,
+            # whose airing can be a programme old if the schedule has stepped on since the
+            # channel was tuned — and the menu is exactly where a stale answer would be
+            # believed.
+            airing = None
+            if self._guide is None:
+                try:
+                    airing = self.lineup.now(self.channel, time.time())
+                except Exception:  # noqa: BLE001 - the menu must open regardless
+                    airing = self.bug.airing
+            if airing is not None and not airing.off_air:
+                self.player.show_overlay(render_menu_now(airing), overlay_id=3)
+            else:
+                self.player.hide_overlay(overlay_id=3)
             return
         self.player.hide_overlay(overlay_id=1)
         if self._tuning:
