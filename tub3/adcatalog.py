@@ -31,14 +31,58 @@ Three details make this correct rather than merely plausible:
 
 from __future__ import annotations
 
+import bisect
 import datetime
+import math
 import os
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from fs42.catalog import ShowCatalog
 from fs42.catalog_entry import MatchingContentNotFound, NoFillerContentFound
 
 DEFAULT_COOLDOWN = datetime.timedelta(minutes=45)
+
+
+# Where the ring's phase is measured from. Arbitrary but fixed: moving it would shift every
+# channel's position in its series, which is the one thing this exists to keep still.
+ORDER_EPOCH = datetime.datetime(2020, 1, 1)
+
+
+@dataclass
+class Ring:
+    """A series in order, laid end to end on the clock, wrapping forever.
+
+    The point of this being a *ring* rather than a cursor is that it holds no state. The
+    episode airing in a block is a pure function of that block's start time, so there is
+    nothing to persist, nothing to resynchronise after a power cut, and a rebuild of an hour
+    that already aired reproduces exactly what aired. A cursor would need a table, a
+    validation rule for when the library changes underneath it, and an answer for a crash
+    between choosing and committing; none of that exists here because there is nothing to
+    get out of step with.
+
+    The mechanism: give every episode a *span* — the block length it will actually occupy,
+    which is its duration rounded up to the schedule grid, exactly as upstream sizes a block.
+    Prefix-sum the spans into a cycle of length `total`. Then the episode for a block
+    beginning at time *t* is the one whose span contains `(t - epoch) mod total`.
+
+    Because a block's length **is** its span, the offset inside a span is carried across the
+    block boundary exactly, so consecutive blocks yield consecutive episodes — and the wrap
+    at the end of the cycle lands back on the first episode with no special case.
+    """
+
+    order: list = field(default_factory=list)
+    prefix: list = field(default_factory=list)
+    total: float = 0.0
+
+    def at(self, when: datetime.datetime):
+        if not self.order or self.total <= 0:
+            return None
+        # Naive subtraction, deliberately: the position follows the wall clock, so a DST
+        # change costs one repeated or skipped episode twice a year rather than shifting
+        # every channel by an hour for half the year.
+        offset = (when - ORDER_EPOCH).total_seconds() % self.total
+        return self.order[bisect.bisect_right(self.prefix, offset) - 1]
 
 
 class Tub3Catalog(ShowCatalog):
@@ -48,6 +92,15 @@ class Tub3Catalog(ShowCatalog):
     # override needs must exist before super().__init__ runs.
     members: dict[str, list[str]] = {}
     cooldown: datetime.timedelta = DEFAULT_COOLDOWN
+
+    # tag -> "rotate" | "marathon". A tag not named here is chosen the way it always was:
+    # weighted-random within the ask, which is right for a film channel and wrong for a
+    # series nobody wants to watch out of order.
+    ordered: dict[str, str] = {}
+    # The grid each tag is scheduled on, so a span can be computed the way upstream sizes a
+    # block. Supplied by the caller because it lives in the station config, not the catalog.
+    increments: dict[str, int] = {}
+    default_increment: int = 30
 
     # How far to relax the ask before giving up. A fixed cooldown is a wish, not a plan: the
     # sustainable spacing is bounded by the inventory, roughly (pool size x gap between ads).
@@ -69,7 +122,108 @@ class Tub3Catalog(ShowCatalog):
         self._last_bump: datetime.datetime | None = None
         self.bumps_aired = 0
         self.bumps_suppressed = 0
+        # Built lazily per tag, and before super() like the rest of the instance state,
+        # because ShowCatalog.__init__ does the catalog work and may reach the override.
+        self._rings: dict[str, Ring | None] = {}
+        self.ordered_picks = 0
         super().__init__(config, *args, **kwargs)
+
+    # ---------- programme order ----------
+
+    def _series_of(self, entry) -> str:
+        """Which series a pool entry belongs to.
+
+        `_link_pool` names every symlink `<series>__<original name>`, so the series is
+        already carried in the filename and no directory structure is needed. That matters:
+        nesting the pools to get series folders is what upstream's own sequence subsystem
+        requires, and doing so would put every series name through its schedule-hint parser,
+        where a show normalising to `may` or `friday` silently becomes airtime-restricted.
+        """
+        return Path(entry.path).name.split("__", 1)[0]
+
+    @staticmethod
+    def _episode_key(entry) -> tuple:
+        """Sort key within a series: season, then episode, then path.
+
+        `tuner.titles.parse_episode` handles S04E12, 4x12 and bare 0412 alike. Sorting on the
+        parsed numbers rather than the filename is what keeps S01E10 after S01E2 — a plain
+        path sort puts it before, and that is the single most likely way for "in order" to be
+        quietly wrong.
+        """
+        from tuner.titles import parse_episode  # noqa: PLC0415 - build-time only
+
+        season, episode = parse_episode(Path(entry.path).name)
+        # Unparsed files sort last, in path order, rather than colliding at the front.
+        return (season if season is not None else 9999,
+                episode if episode is not None else 9999,
+                entry.path)
+
+    def _ring(self, tag: str, mode: str) -> Ring | None:
+        """Lay a tag's episodes out in order, once, and keep it.
+
+        `marathon` runs each series to its end before starting the next — right for a channel
+        showing one thing. `rotate` interleaves them round-robin, which is what a strip does:
+        an episode of each in turn, every one of them advancing by one each cycle.
+        """
+        if tag in self._rings:
+            return self._rings[tag]
+
+        entries = [e for e in (self.clip_index.get(tag) or []) if (e.duration or 0) >= 1]
+        if not entries:
+            self._rings[tag] = None
+            return None
+
+        series: dict[str, list] = {}
+        for entry in entries:
+            series.setdefault(self._series_of(entry), []).append(entry)
+        for episodes in series.values():
+            episodes.sort(key=self._episode_key)
+
+        names = sorted(series)
+        if mode == "marathon":
+            order = [episode for name in names for episode in series[name]]
+        else:
+            order = []
+            for index in range(max(len(v) for v in series.values())):
+                for name in names:
+                    if index < len(series[name]):
+                        order.append(series[name][index])
+
+        # A span is the block the episode will actually occupy: its duration rounded up to
+        # the grid, which is exactly how upstream sizes a block. Using the same arithmetic is
+        # what makes consecutive blocks land on consecutive episodes rather than drifting.
+        grid = (self.increments.get(tag) or self.default_increment) * 60
+        prefix, running = [], 0.0
+        for entry in order:
+            prefix.append(running)
+            running += max(grid, math.ceil((entry.duration or 0) / grid) * grid)
+
+        ring = Ring(order=order, prefix=prefix, total=running)
+        unparsed = sum(1 for e in entries if self._episode_key(e)[0] == 9999)
+        print(f"    order: {tag} {mode} — {len(names)} series, {len(order)} episodes, "
+              f"cycle {running / 3600:.1f}h"
+              + (f", {unparsed} unnumbered" if unparsed else ""))
+        self._rings[tag] = ring
+        return ring
+
+    def find_candidate(self, tag, seconds, when, exclusion_index=None,
+                       proposed_start=None, meta_hints=None):
+        """Pick the episode whose turn it is, when the tag is an ordered one.
+
+        Falls through to upstream for everything else, and also whenever the ring's answer
+        will not do — too long for the ask, or barred from this hour by a path-derived
+        schedule hint. Forcing it in either case would be worse than being out of order.
+        """
+        mode = self.ordered.get(tag)
+        if mode:
+            ring = self._ring(tag, mode)
+            entry = ring.at(when) if ring else None
+            if entry is not None and seconds > (entry.duration or 0) >= 1:
+                self.ordered_picks += 1
+                entry.count = (getattr(entry, "count", 0) or 0) + 1
+                return entry
+        return super().find_candidate(tag, seconds, when, exclusion_index,
+                                      proposed_start, meta_hints)
 
     # ---------- the one override ----------
 
@@ -221,6 +375,9 @@ def install(
     *,
     cooldown_minutes: int = 45,
     refresh_clusters: bool = False,
+    ordered: dict[str, str] | None = None,
+    increments: dict[str, int] | None = None,
+    default_increment: int = 30,
 ) -> type[Tub3Catalog]:
     """Bind Tub3Catalog into the schedule builder and load perceptual clusters.
 
@@ -231,6 +388,11 @@ def install(
     import fs42.liquid_schedule as liquid_schedule
 
     Tub3Catalog.cooldown = datetime.timedelta(minutes=cooldown_minutes)
+    # Per-station, so it must be reset every install rather than accumulated — two channels
+    # can use the same tag name with different ordering.
+    Tub3Catalog.ordered = dict(ordered or {})
+    Tub3Catalog.increments = dict(increments or {})
+    Tub3Catalog.default_increment = default_increment
 
     if commercial_dir is not None:
         from .clusters import load_or_compute

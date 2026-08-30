@@ -124,6 +124,14 @@ class Daypart:
     # where a person reads the schedule rather than in a second parallel structure.
     increment: int | None = None
     breaks: str | None = None
+    # How this slot picks its next programme: "rotate", "marathon", or unset for the
+    # weighted-random default.
+    #
+    # This is what makes a slot a *programme* rather than a pool. "The Simpsons at six"
+    # means the next episode each evening and the first one again when the series runs out —
+    # not a random episode from a bag, which is what a shuffle gives and what makes a
+    # channel feel like a screensaver rather than a station.
+    order: str | None = None
     # Which days this daypart applies to. Empty means every day, which is what a channel
     # normally wants and keeps the common case unwritten.
     #
@@ -183,6 +191,9 @@ class Channel:
     # directory listing, and a glob that silently matches nothing is the same failure this
     # is here to prevent — so `check_sources` reports any pattern that matched no file.
     exclude: dict[str, list[str]] = field(default_factory=dict)
+    # Channel-wide ordering, for a station that is one shape all day. A daypart's own
+    # `order` wins over it.
+    order: str | None = None
     dayparts: list[Daypart] = field(default_factory=list)
     # Movie channels want long blocks; a sitcom strip wants half-hours.
     increment: int | None = None
@@ -301,6 +312,7 @@ def load(path: Path) -> list[Channel]:
                 increment=part.get("increment"),
                 breaks=part.get("breaks"),
                 days=list(part.get("days", [])),
+                order=part.get("order"),
             ))
         channels.append(Channel(
             number=int(raw["number"]),
@@ -309,6 +321,7 @@ def load(path: Path) -> list[Channel]:
             kind=raw.get("kind", "standard"),
             sources={k: list(v) for k, v in raw.get("sources", {}).items()},
             exclude={k: list(v) for k, v in raw.get("exclude", {}).items()},
+            order=raw.get("order"),
             dayparts=dayparts,
             increment=raw.get("increment"),
             break_duration=int(raw.get("break_duration", 120)),
@@ -940,6 +953,22 @@ def compile_station(channel: Channel, media_root: Path, *, pools: dict[str, str]
     conf.update(by_day)
     if commercial_tag:
         conf["commercial_dir"] = commercial_tag
+
+    # Which tags play in order, and how. Keyed by tag because that is what the catalog is
+    # asked for; a private key on the station config, which the upstream schema tolerates
+    # because it declares no `additionalProperties: false` at station level.
+    #
+    # A daypart's `order` wins over the channel's, so "this station is a strip, except the
+    # Sunday film slot" is expressible without repeating the tag.
+    ordering: dict[str, str] = {}
+    if channel.order:
+        for tag in channel.sources:
+            ordering[tag] = channel.order
+    for part in channel.dayparts:
+        if part.order:
+            ordering[part.tag] = part.order
+    if ordering:
+        conf["tub3_order"] = ordering
 
     # Per-daypart block length and break policy, for a channel that is not one shape all
     # day. Emitted only when something actually differs from the station setting, so a

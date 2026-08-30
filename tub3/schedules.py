@@ -215,7 +215,18 @@ def schedule_all(
         # cluster computation is cached on disk, so revisiting a pool a second time is cheap.
         commercial_tag = conf.get("commercial_dir")
         pool = Path(conf["content_dir"]) / commercial_tag if commercial_tag else None
-        install(pool, cooldown_minutes=cooldown)
+        # `tub3_order` names the tags that play in order rather than at random, and the
+        # per-tag grid is what a span is rounded to — both live in the station config, and
+        # both have to be re-bound per station for the same reason the ad pool does.
+        increments = {
+            tag: entry["schedule_increment"]
+            for tag, entry in (conf.get("tag_overrides") or {}).items()
+            if isinstance(entry, dict) and entry.get("schedule_increment")
+        }
+        install(pool, cooldown_minutes=cooldown,
+                ordered=conf.get("tub3_order") or {},
+                increments=increments,
+                default_increment=conf.get("schedule_increment") or 30)
 
         try:
             catalog = ShowCatalog(station_conf, rebuild_catalog=True)
