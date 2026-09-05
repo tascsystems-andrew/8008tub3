@@ -236,6 +236,30 @@ def send_key(ui_cmd: str, to: str = TV_ADDRESS, timeout: float = 4.0) -> bool:
                  "--user-control-released"], timeout)
 
 
+def take_input() -> bool:
+    """Announce ourselves as the active source, without touching the set's power.
+
+    The one CEC message that changes which input is showing, sent on its own. That
+    separation is the whole point of the power logic: a television already on, showing
+    something else, should be *switched*, not turned off and not woken.
+    """
+    from .cectest import send
+    return send("active-source").ok
+
+
+def our_address() -> str | None:
+    """This box's physical address, as the television numbers its ports.
+
+    Derived from EDID, so it follows the cable: moving from HDMI1 to HDMI2 changed it from
+    1.0.0.0 to 2.0.0.0 with nothing to edit.
+    """
+    from .cectest import physical_address
+    try:
+        return physical_address()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def tv_off() -> bool:
     if not Path(CEC_DEVICE).exists() or not shutil.which("cec-ctl"):
         return False

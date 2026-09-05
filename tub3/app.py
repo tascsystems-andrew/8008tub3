@@ -511,6 +511,24 @@ def main(argv: list[str] | None = None) -> int:
     # Where volume is addressed: an audio system if one answers, the television otherwise.
     # Re-checked periodically rather than once, so a soundbar plugged in months from now is
     # found without anyone restarting anything — which is the whole point of an appliance.
+    def take_input() -> None:
+        """Switch the television to us, without waking or sleeping it."""
+        from . import cec  # noqa: PLC0415 - keeps CEC off the desktop import path
+
+        try:
+            if not cec.take_input():
+                print("  cec: could not take the input")
+        except Exception as exc:  # noqa: BLE001
+            print(f"  cec: taking the input raised {exc}")
+
+    def our_address() -> str | None:
+        from . import cec  # noqa: PLC0415
+
+        try:
+            return cec.our_address()
+        except Exception:  # noqa: BLE001
+            return None
+
     volume_target: str = "0"
 
     def _watch_for_amplifier(interval: float = 600.0) -> None:
@@ -563,7 +581,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  cec: volume {ui_cmd} raised {exc}")
 
     box = Box(lineup, player, start_channel=start, state=state,
-              rescan=rescan, power=power, volume=volume, tv_state=tv_state)
+              rescan=rescan, power=power, volume=volume, tv_state=tv_state,
+              take_input=take_input, our_address=our_address())
 
     # AirPlay, if the receiver is running. Deliberately not required and never fatal: the
     # unit is separate, it may be stopped or absent, and a television whose channels work is

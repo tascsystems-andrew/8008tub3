@@ -475,6 +475,20 @@ class CecDriver(Driver):
     # error anywhere, on a box where four other input drivers are working.
     #
     # A command cec-ctl has no name for prints as a bare decimal, hence the second pattern.
+    # `ACTIVE_SOURCE` is a broadcast naming the physical address now on screen. Watching it
+    # is how the box knows whether it is the thing being shown — which cannot be asked for
+    # reliably, because only the *current* active source answers a request, so silence is
+    # ambiguous between "nobody" and "somebody who does not reply".
+    #
+    #     Transmitted by Playback Device 1 to all (4 to 15): ACTIVE_SOURCE (0x82):
+    #             phys-addr: 2.0.0.0
+    #
+    # The address is on the following line, so the announcement arms and the next
+    # `phys-addr` claims it.
+    ACTIVE = re.compile(r"ACTIVE_SOURCE \(0x82\)")
+    REQUEST_ACTIVE = re.compile(r"REQUEST_ACTIVE_SOURCE")
+    PHYS = re.compile(r"phys-addr:\s*([0-9]\.[0-9]\.[0-9]\.[0-9])")
+
     UI_HEX = re.compile(r"ui-cmd:.*\(0x([0-9a-fA-F]{1,2})\)")
     UI_DEC = re.compile(r"ui-cmd:\s*(\d{1,3})\s*$")
     RELEASED = re.compile(r"USER_CONTROL_RELEASED")
@@ -492,6 +506,9 @@ class CecDriver(Driver):
     def __init__(self, device: str = "/dev/cec0"):
         self.device = device
         self._proc = None
+        # The physical address last announced as being on screen, by anyone. None means
+        # nothing has claimed it since the box started listening.
+        self.screen_owner: str | None = None
 
     def available(self) -> bool:
         import shutil
@@ -510,7 +527,19 @@ class CecDriver(Driver):
 
         held: int | None = None
         held_at = 0.0
+        expecting_address = False
         for line in self._proc.stdout:
+            if expecting_address:
+                match = self.PHYS.search(line)
+                if match:
+                    self.screen_owner = match.group(1)
+                    expecting_address = False
+                    continue
+                expecting_address = False
+            if self.ACTIVE.search(line) and not self.REQUEST_ACTIVE.search(line):
+                expecting_address = True
+                continue
+
             if self.RELEASED.search(line):
                 held = None
                 continue
