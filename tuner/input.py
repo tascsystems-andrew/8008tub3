@@ -528,13 +528,46 @@ class CecDriver(Driver):
         from pathlib import Path
         return Path(self.device).exists() and shutil.which("cec-ctl") is not None
 
+    def _monitor_command(self) -> list[str]:
+        """How to start the bus monitor, privileged if we are allowed.
+
+        Monitor mode needs CAP_NET_ADMIN. Without it the adapter still delivers messages
+        *addressed to us*, which is why the television's remote worked all along — and it
+        silently drops broadcasts, which is how the box learns which input the set is
+        showing. Observed exactly that way: a root monitor saw `ROUTING_CHANGE` when the
+        input was switched by hand, an unprivileged one running beside it saw nothing, and
+        the long press consequently turned the television off instead of switching to us.
+
+        Falls back to running unprivileged when sudo is unavailable or refuses. That is worth
+        keeping: without broadcasts the box loses input tracking, but the remote still works,
+        and a television that answers its buttons beats one that does not start.
+        """
+        import shutil
+        import subprocess
+
+        base = [shutil.which("cec-ctl") or "cec-ctl", "-d", self.device, "--monitor"]
+        if shutil.which("sudo"):
+            try:
+                allowed = subprocess.run(["sudo", "-n", "true"],
+                                         capture_output=True, timeout=5).returncode == 0
+            except (OSError, subprocess.SubprocessError):
+                allowed = False
+            if allowed:
+                return ["sudo", "-n"] + base
+        return base
+
     def events(self) -> Iterator[Event]:
         import subprocess
         import time
 
         self._proc = subprocess.Popen(
-            ["cec-ctl", "-d", self.device, "--monitor"],
+            self._monitor_command(),
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+            # Its own process group, and this is load-bearing rather than tidiness: `close`
+            # signals the group so the kill reaches `cec-ctl` underneath sudo. Without a new
+            # session that group is the *tuner's*, and stopping the monitor would stop the
+            # television with it.
+            start_new_session=True,
         )
         assert self._proc.stdout is not None
 
@@ -588,8 +621,24 @@ class CecDriver(Driver):
                 yield Event(CEC_MAP[code], source=self.name)
 
     def close(self) -> None:
-        if self._proc:
-            self._proc.terminate()
+        """Stop the monitor, including when it is running behind sudo.
+
+        `terminate` reaches the sudo process and not the `cec-ctl` underneath it, which would
+        leave a root monitor holding the adapter after the tuner had gone. Signalling the
+        whole process group reaches both.
+        """
+        if not self._proc:
+            return
+        import os
+        import signal
+
+        try:
+            os.killpg(os.getpgid(self._proc.pid), signal.SIGTERM)
+        except (OSError, ProcessLookupError):
+            try:
+                self._proc.terminate()
+            except OSError:
+                pass
 
 
 def multiplex(drivers: list[Driver], on_event: Callable[[Event], None]) -> None:

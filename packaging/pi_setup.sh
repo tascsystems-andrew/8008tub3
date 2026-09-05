@@ -221,6 +221,18 @@ apt-get install -y --no-install-recommends cifs-utils smbclient
 # must not be root. This helper is the only bridge: one program, four verbs, no shell path.
 install -m 0755 "$REPO/packaging/tub3-nas" /usr/local/sbin/tub3-nas
 
+# The CEC bus monitor needs CAP_NET_ADMIN to enter monitor mode. Without it the adapter
+# still delivers messages addressed to this box — which is why the television's remote works
+# either way — and silently drops broadcasts. The broadcasts are `ROUTING_CHANGE` and
+# `SET_STREAM_PATH`, which is how the box knows which input the set is showing, and without
+# them a long press turns the television off when it should have switched to us.
+#
+# Scoped to the one command, like the storage helper below it.
+cat > /etc/sudoers.d/tub3-cec <<CEC
+$RUN_USER ALL=(root) NOPASSWD: /usr/bin/cec-ctl -d /dev/cec0 --monitor
+CEC
+chmod 0440 /etc/sudoers.d/tub3-cec
+
 # Scoped to exactly that binary. Not a general NOPASSWD grant — the web user gets the
 # ability to mount a share, and nothing else.
 cat > /etc/sudoers.d/tub3-nas <<SUDO
