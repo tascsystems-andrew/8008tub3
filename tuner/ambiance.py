@@ -13,6 +13,12 @@ everything that makes the rest of the dial slow when the NAS is busy.
 axis that ever changes. `12/` in December, `07/` in July, falling back to whatever sits at the
 top level when a month has nothing of its own. Named folders work too, because typing
 `December` is easier to get right than remembering whether it is `12` or `1`.
+
+**And a part of the day.** A month's clips are not interchangeable: "Paris Balcony Jazz at
+Night" is wrong at half past four in the afternoon, which is exactly what it did. So a clip
+whose name pins it to a time of day is only offered at that time of day, and one that says
+nothing is offered always. If nothing fits the hour, the whole month plays anyway — a
+seasonally right clip at the wrong hour still beats a channel with nothing on it.
 """
 
 from __future__ import annotations
@@ -26,6 +32,27 @@ VIDEO_SUFFIXES = {".mp4", ".mkv", ".avi", ".mov", ".m4v", ".webm", ".mpg", ".mpe
 MONTH_NAMES = ("january", "february", "march", "april", "may", "june",
                "july", "august", "september", "october", "november", "december")
 
+DAYPARTS = ("morning", "afternoon", "evening", "night")
+
+# Words that pin a clip to a part of the day.
+#
+# Deliberately narrow. "day" is NOT here: "Rainy Day in a Cozy Room" and "Start A New Day" are
+# about weather and encouragement, not the clock, and a false match is worse than no match —
+# it would hide a clip that was fine at any hour. Anything unrecognised stays unmarked, and
+# unmarked means always eligible, so the cost of omitting a word is far lower than the cost of
+# guessing one wrong.
+DAYPART_WORDS = {
+    "morning": ("morning", "sunrise", "dawn", "daybreak"),
+    "afternoon": ("afternoon", "midday", "noon"),
+    "evening": ("evening", "sunset", "dusk", "twilight", "golden hour"),
+    "night": ("night", "midnight", "candlelit", "candlelight", "moonlit", "starry", "nocturne"),
+}
+
+# Fixed hours rather than real sunrise and sunset. Actual daylight would be more correct in
+# June and December, but it needs a location and an almanac to answer "is it evening", and the
+# whole point of this channel is that it answers instantly and predictably.
+DAYPART_HOURS = ((5, "morning"), (11, "afternoon"), (17, "evening"), (21, "night"))
+
 
 def month_folders(when: float | None = None) -> tuple[str, ...]:
     """The names this month's folder might have, most specific first."""
@@ -34,7 +61,7 @@ def month_folders(when: float | None = None) -> tuple[str, ...]:
     return (f"{stamp.month:02d}", str(stamp.month), name, name.capitalize(), name.upper())
 
 
-def clips_for(folder: Path | None, when: float | None = None) -> list[Path]:
+def _clips_for_month(folder: Path | None, when: float | None = None) -> list[Path]:
     """This month's loop, or the general one.
 
     Returns [] when nothing is configured. The caller then leaves the channel off the dial
@@ -93,6 +120,63 @@ def clips_for(folder: Path | None, when: float | None = None) -> list[Path]:
               f"using {MONTH_NAMES[month - 1]} ({len(found)} clip(s))")
         return found
     return []
+
+
+def daypart_at(when: float | None = None) -> str:
+    """Which part of the day it is now."""
+    hour = datetime.fromtimestamp(time.time() if when is None else when).hour
+    current = DAYPART_HOURS[-1][1]          # before the first boundary is still last night
+    for start, name in DAYPART_HOURS:
+        if hour >= start:
+            current = name
+    return current
+
+
+def daypart_of(clip: Path, root: Path) -> str | None:
+    """The part of the day a clip is for, or None if it never says.
+
+    A folder beats a filename. `09/evening/rain.mp4` is a decision somebody made; a title is a
+    guess we are making on their behalf, and the guess should lose when there is a decision.
+    """
+    try:
+        parents = clip.relative_to(root).parts[:-1]
+    except ValueError:
+        parents = ()
+    for part in parents:
+        folder = part.strip().lower()
+        for daypart, words in DAYPART_WORDS.items():
+            if folder == daypart or folder in words:
+                return daypart
+
+    name = clip.stem.lower()
+    for daypart in DAYPARTS:                # fixed order, so two markers resolve the same way twice
+        if any(word in name for word in DAYPART_WORDS[daypart]):
+            return daypart
+    return None
+
+
+def for_daypart(clips: list[Path], root: Path, when: float | None = None) -> list[Path]:
+    """Narrow a month to the clips that suit this hour, or leave it alone if none do."""
+    if not clips:
+        return clips
+    now = daypart_at(when)
+    fitting = [c for c in clips if (d := daypart_of(c, root)) is None or d == now]
+    if not fitting:
+        # Every clip this month is pinned to some other hour. Play them all rather than show
+        # nothing: wrong time of day is a blemish, an empty channel is a fault.
+        print(f"  ambiance: nothing suits {now}, playing all {len(clips)} clip(s)")
+        return clips
+    if len(fitting) != len(clips):
+        print(f"  ambiance: {now}, {len(fitting)} of {len(clips)} clip(s) suit the hour")
+    return fitting
+
+
+def clips_for(folder: Path | None, when: float | None = None) -> list[Path]:
+    """This month's loop, narrowed to the clips that suit this time of day."""
+    clips = _clips_for_month(folder, when)
+    if not clips or not folder:
+        return clips
+    return for_daypart(clips, Path(folder), when)
 
 
 def _videos_in(folder: Path, *, skip: set[str] | None = None) -> list[Path]:

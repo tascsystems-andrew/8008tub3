@@ -115,6 +115,17 @@ fallback exists because the alternative was worse: August ended, `09/` was empty
 channel simply stopped appearing on the dial with nothing anywhere saying why. An empty folder
 should cost you a seasonal mismatch, not a missing channel.
 
+**Time of day is read from the name.** A clip called `... at Night` is only offered between
+21:00 and 05:00, `... Morning` or `... Sunrise` between 05:00 and 11:00, `... Sunset` or
+`... Evening` between 17:00 and 21:00. A name that says nothing about the hour is offered
+always, which is the common case and the safe default. Only strong words count — `Rainy Day`
+and `Late Summer Harvest` are about weather and the season, not the clock, so they stay
+unpinned; guessing wrong hides a clip that was fine.
+
+If the title lies, override it with a folder: `09/evening/whatever.mp4`. A folder is a
+decision, a filename is our guess, and the decision wins. When nothing suits the current
+hour — a month holding one clip that is pinned to the morning — the whole month plays anyway.
+
 `lineup.json` is the dial. One entry per channel:
 
 ```json
