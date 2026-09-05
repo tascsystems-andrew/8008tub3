@@ -34,6 +34,52 @@ from pathlib import Path
 from .bootstrap import VENDOR, _placeholder_image
 
 
+def prune_dangling(content_dir: Path) -> int:
+    """Remove pool symlinks whose target has gone, and say how many.
+
+    A tag pool is a directory of symlinks into the media share, so anything that moves or is
+    renamed on the far side leaves one pointing at nothing. Upstream then raises on the first
+    such link while indexing, and the whole channel gets no schedule at all — one missing
+    episode of King of the Hill took BOOBTUBE off the air entirely.
+
+    That is the wrong shape of failure for an appliance. A library is not static: files get
+    renamed, a share gets reorganised, a disk is swapped. Losing an episode should cost that
+    episode, not the channel, and certainly not silently — the count is printed so a pool
+    quietly emptying is visible rather than inferred from a dead station weeks later.
+
+    Only symlinks are touched, and only ones that do not resolve. A real file is never
+    removed by this, whatever else is wrong.
+    """
+    removed = 0
+    if not content_dir.is_dir():
+        return 0
+    # `os.walk(followlinks=True)`, not `Path.rglob`. A station's directory is a set of
+    # symlinks to the shared tag pools, and rglob does not descend into a symlinked
+    # directory — so the first version of this walked the station, found nothing but the tag
+    # links themselves, reported zero, and left every dead episode in place.
+    seen: set[str] = set()
+    for base, dirs, files in os.walk(content_dir, followlinks=True):
+        # Following links means a cycle is possible; visiting each real directory once
+        # removes the question.
+        try:
+            key = os.path.realpath(base)
+        except OSError:
+            continue
+        if key in seen:
+            dirs[:] = []
+            continue
+        seen.add(key)
+        for name in files:
+            path = os.path.join(base, name)
+            try:
+                if os.path.islink(path) and not os.path.exists(path):
+                    os.unlink(path)
+                    removed += 1
+            except OSError:
+                continue
+    return removed
+
+
 def station_confs() -> list[dict]:
     """Every station config on disk, lowest channel first.
 
@@ -223,6 +269,12 @@ def schedule_all(
             for tag, entry in (conf.get("tag_overrides") or {}).items()
             if isinstance(entry, dict) and entry.get("schedule_increment")
         }
+        # Sweep dead links before indexing: upstream raises on the first one and takes the
+        # whole channel with it.
+        gone = prune_dangling(Path(conf["content_dir"]))
+        if gone and not quiet:
+            _say(f"         pruned {gone} link(s) whose media has moved")
+
         install(pool, cooldown_minutes=cooldown,
                 ordered=conf.get("tub3_order") or {},
                 increments=increments,

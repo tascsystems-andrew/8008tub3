@@ -361,14 +361,21 @@ def wake() -> bool:
     gap = float(config.get("gap", 1.2))
     for step in strategy["steps"]:
         if step == "active-source":
-            # Do not announce the source to a set that is not listening yet.
+            # Do not announce the source to a set that is not listening yet — and then do
+            # not believe it when it says it is. Observed on this television: it reports
+            # `on`, ignores the first Active Source anyway, and takes the input only on a
+            # later one. So the announcement is repeated rather than timed.
             await_on(timeout=float(config.get("wake_timeout", 8.0)))
+            attempts = int(config.get("active_source_repeats", 4))
+            for index in range(attempts):
+                if not send(step).ok:
+                    return False
+                if index < attempts - 1:
+                    time.sleep(gap)
+            continue
         if not send(step).ok:
             return False
         time.sleep(gap)
-
-    # Say it once more. Cheap, harmless, and the difference on a slow panel.
-    send("active-source")
     return True
 
 
