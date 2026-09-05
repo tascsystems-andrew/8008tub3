@@ -331,6 +331,17 @@ class Box:
     # longer than any deliberate hold and short enough that the worst case is survivable.
     VOLUME_MAX_HOLD = 5.0
 
+    # How often a held key is re-sent. This television steps once per `<User Control
+    # Pressed>` and does not ramp on its own — confirmed from a trace: one press held for two
+    # seconds moved the volume exactly one step — so a ramp has to be a stream, and the only
+    # question is how fast.
+    #
+    # Not as fast as the bus allows. At the bus rate of about eleven a second the volume
+    # crossed its whole range in a few seconds and read as a control that would not stop.
+    # Five a second gives roughly ten steps for a two-second hold, which is about what a
+    # television's own remote does.
+    VOLUME_STEP = 0.20
+
     # Minimum time between key events while a button is held, and it exists because the
     # television has a queue.
     #
@@ -613,6 +624,7 @@ class Box:
         """
         wire: str | None = None
         pressed_at = 0.0
+        stepped_at = 0.0
 
         def release(reason: str) -> None:
             nonlocal wire
@@ -639,6 +651,8 @@ class Box:
                     time.sleep(0.02)
                     continue
 
+                holding = self._volume_holding
+
                 # Held too long, whatever the remote claims. Never negotiable.
                 if wire is not None and now - pressed_at > self.VOLUME_MAX_HOLD:
                     release("held too long")
@@ -658,12 +672,20 @@ class Box:
                 if wire is not None and wire != ui_cmd:
                     release("direction changed")
 
-                if wire is None:
+                # One press per step, paced. `wire` still tracks that a key is outstanding
+                # so the release at the end is never skipped.
+                # A second press only when the remote says the button is still down.
+                # Without the `holding` test a tap re-presses at VOLUME_STEP (0.20s) while
+                # the quiet check does not fire until VOLUME_HOLD_GAP (0.25s), so every
+                # single press became two steps.
+                if wire is None or (holding and now - stepped_at >= self.VOLUME_STEP):
                     try:
                         self._volume("press", ui_cmd)
-                        wire, pressed_at = ui_cmd, time.monotonic()
+                        stepped_at = time.monotonic()
+                        if wire is None:
+                            wire, pressed_at = ui_cmd, stepped_at
                         if VOLUME_TRACE:
-                            print(f"  vol: -> press {ui_cmd} (held)", flush=True)
+                            print(f"  vol: -> press {ui_cmd}", flush=True)
                     except Exception as exc:  # noqa: BLE001
                         if VOLUME_TRACE:
                             print(f"  vol: -> {ui_cmd} RAISED {exc}", flush=True)
