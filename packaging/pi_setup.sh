@@ -110,13 +110,35 @@ RULES
 udevadm control --reload-rules || true
 
 # ------------------------------------------------------------------ services ---
+# ------------------------------------------------------------------- clock ---
+say "Making services wait for a correct clock"
+
+# A Raspberry Pi has no battery-backed clock unless one is fitted, so it boots believing it
+# is 1970 and only learns otherwise when NTP answers. Observed on this box: the kernel set
+# the clock to 1970-01-01, timesyncd guessed from a saved timestamp, and the real time
+# arrived minutes later.
+#
+# Everything here is driven by the wall clock. A tuner that starts before the correction asks
+# what is on now and is told nothing is, on every channel; a schedule build that starts before
+# it writes a day of programming against the wrong date. `time-sync.target` alone does not
+# help — it is passive, and without this service it is reached immediately and means nothing.
+#
+# The wait is capped and the dependency is `Wants`, deliberately. A box whose network is down
+# should come up late and possibly wrong; it should never come up not at all.
+mkdir -p /etc/systemd/system/systemd-time-wait-sync.service.d
+cat > /etc/systemd/system/systemd-time-wait-sync.service.d/timeout.conf <<'CONF'
+[Service]
+TimeoutStartSec=60
+CONF
+systemctl enable systemd-time-wait-sync.service >/dev/null 2>&1 || true
+
 say "Installing services"
 
 cat > /etc/systemd/system/tub3-tuner.service <<SERVICE
 [Unit]
 Description=8008TUB3 tuner
-After=network-online.target
-Wants=network-online.target
+After=network-online.target time-sync.target
+Wants=network-online.target time-sync.target
 # A television comes back on its own. Never give up restarting it.
 #
 # This key belongs in [Unit], not [Service]. systemd parses it there and silently ignores
@@ -166,7 +188,10 @@ SERVICE
 cat > /etc/systemd/system/tub3-build.service <<SERVICE
 [Unit]
 Description=8008TUB3 schedule build
-After=network-online.target
+# time-sync.target as well as the network: a build started before the clock is corrected
+# writes a day of programming against the wrong date.
+After=network-online.target time-sync.target
+Wants=time-sync.target
 
 [Service]
 Type=oneshot
