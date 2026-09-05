@@ -475,19 +475,32 @@ class CecDriver(Driver):
     # error anywhere, on a box where four other input drivers are working.
     #
     # A command cec-ctl has no name for prints as a bare decimal, hence the second pattern.
-    # `ACTIVE_SOURCE` is a broadcast naming the physical address now on screen. Watching it
-    # is how the box knows whether it is the thing being shown — which cannot be asked for
-    # reliably, because only the *current* active source answers a request, so silence is
-    # ambiguous between "nobody" and "somebody who does not reply".
+    # Who is on screen, taken from the television rather than from the sources.
     #
-    #     Transmitted by Playback Device 1 to all (4 to 15): ACTIVE_SOURCE (0x82):
+    # The obvious signal is `ACTIVE_SOURCE`, which a device broadcasts when it takes the
+    # screen. It is not enough on its own: this Apple TV never appears on the bus at all — a
+    # sweep of all fifteen logical addresses finds only the set and this box — so nothing
+    # would ever announce it, and the screen would look permanently ours.
+    #
+    # The set announces the change itself, which is better because it is true regardless of
+    # what the sources do. Captured while switching inputs by hand:
+    #
+    #     Received from TV to all (0 to 15): ROUTING_CHANGE (0x80):
+    #             orig-phys-addr: 2.0.0.0
+    #             new-phys-addr: 1.0.0.0
+    #     Received from TV to all (0 to 15): SET_STREAM_PATH (0x86):
     #             phys-addr: 2.0.0.0
     #
-    # The address is on the following line, so the announcement arms and the next
-    # `phys-addr` claims it.
-    ACTIVE = re.compile(r"ACTIVE_SOURCE \(0x82\)")
+    # All three are broadcasts, which matters: a broadcast reaches every follower, so this
+    # works without the root privileges that promiscuous monitoring needs.
+    #
+    # The address is on a following line, so the announcement arms and the next matching
+    # address line claims it. `ROUTING_CHANGE` carries two, and only the new one counts.
+    OWNER_NEW = re.compile(r"ROUTING_CHANGE \(0x80\)")
+    OWNER_ANY = re.compile(r"SET_STREAM_PATH \(0x86\)|ACTIVE_SOURCE \(0x82\)")
     REQUEST_ACTIVE = re.compile(r"REQUEST_ACTIVE_SOURCE")
-    PHYS = re.compile(r"phys-addr:\s*([0-9]\.[0-9]\.[0-9]\.[0-9])")
+    NEW_PHYS = re.compile(r"new-phys-addr:\s*([0-9]\.[0-9]\.[0-9]\.[0-9])")
+    PHYS = re.compile(r"(?<!-)phys-addr:\s*([0-9]\.[0-9]\.[0-9]\.[0-9])")
 
     UI_HEX = re.compile(r"ui-cmd:.*\(0x([0-9a-fA-F]{1,2})\)")
     UI_DEC = re.compile(r"ui-cmd:\s*(\d{1,3})\s*$")
@@ -527,17 +540,26 @@ class CecDriver(Driver):
 
         held: int | None = None
         held_at = 0.0
-        expecting_address = False
+        # None: not in an announcement. "new": inside a ROUTING_CHANGE, waiting for the
+        # *new* address. "any": inside a SET_STREAM_PATH or ACTIVE_SOURCE.
+        awaiting: str | None = None
         for line in self._proc.stdout:
-            if expecting_address:
-                match = self.PHYS.search(line)
+            if awaiting:
+                pattern = self.NEW_PHYS if awaiting == "new" else self.PHYS
+                match = pattern.search(line)
                 if match:
                     self.screen_owner = match.group(1)
-                    expecting_address = False
+                    awaiting = None
                     continue
-                expecting_address = False
-            if self.ACTIVE.search(line) and not self.REQUEST_ACTIVE.search(line):
-                expecting_address = True
+                # ROUTING_CHANGE puts orig-phys-addr first; keep waiting through it.
+                if awaiting == "new" and "orig-phys-addr" in line:
+                    continue
+                awaiting = None
+            if self.OWNER_NEW.search(line):
+                awaiting = "new"
+                continue
+            if self.OWNER_ANY.search(line) and not self.REQUEST_ACTIVE.search(line):
+                awaiting = "any"
                 continue
 
             if self.RELEASED.search(line):
