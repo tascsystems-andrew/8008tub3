@@ -15,6 +15,7 @@ import json
 import sqlite3
 import sys
 import threading
+import time
 from pathlib import Path
 
 from tuner.box import Box
@@ -507,7 +508,28 @@ def main(argv: list[str] | None = None) -> int:
             return "unknown"
         return state or "unknown"
 
-    volume_target: str | None = None
+    # Where volume is addressed: an audio system if one answers, the television otherwise.
+    # Re-checked periodically rather than once, so a soundbar plugged in months from now is
+    # found without anyone restarting anything — which is the whole point of an appliance.
+    volume_target: str = "0"
+
+    def _watch_for_amplifier(interval: float = 600.0) -> None:
+        from . import cec  # noqa: PLC0415 - keeps CEC off the desktop import path
+
+        nonlocal volume_target
+        while True:
+            try:
+                found = cec.audio_system_present()
+            except Exception:  # noqa: BLE001 - a silent bus is not fatal
+                found = False
+            target = cec.AUDIO_ADDRESS if found else cec.TV_ADDRESS
+            if target != volume_target:
+                print(f"  cec: volume now goes to "
+                      f"{'the audio system' if found else 'the television'}")
+                volume_target = target
+            time.sleep(interval)
+
+    threading.Thread(target=_watch_for_amplifier, daemon=True).start()
 
     def volume(action: str, ui_cmd: str) -> None:
         """Hand a volume key to the television.
@@ -526,13 +548,10 @@ def main(argv: list[str] | None = None) -> int:
         # Resolved once and remembered for the length of a hold: probing the bus costs a
         # round trip, and paying it per repeat would halve the ramp rate to answer a question
         # whose answer cannot change while a button is down.
-        nonlocal volume_target
-        # Resolved once and remembered for the length of a hold: probing the bus costs a
-        # round trip, and paying it per step would halve a ramp that is already bounded by
-        # how fast `cec-ctl` starts up.
-        if volume_target is None:
-            volume_target = (cec.AUDIO_ADDRESS if cec.audio_system_present()
-                             else cec.TV_ADDRESS)
+        # Never probed on this path. Where volume goes is decided by the watcher below, off
+        # the keypress entirely: asking costs a round trip, and asking when there is *no*
+        # audio system costs the full retry cycle — seconds — which would land on the first
+        # press of a gesture and read as the button being broken.
         try:
             if action == "release":
                 cec.release_key(to=volume_target)
