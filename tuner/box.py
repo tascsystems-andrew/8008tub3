@@ -168,6 +168,8 @@ class Box:
         power: Callable[[bool], None] | None = None,
         volume: Callable[[str], None] | None = None,
         tv_state: Callable[[], str] | None = None,
+        take_input: Callable[[], None] | None = None,
+        our_address: str | None = None,
     ):
         self.lineup = lineup
         self._rescan_for = rescan
@@ -178,6 +180,16 @@ class Box:
         # Whether the television is on, as the television sees it. Injected for the same
         # reason as the others: `tuner` does not import `tub3`.
         self._tv_state = tv_state
+        # Announcing ourselves as the active source, without touching the set's power — the
+        # message that switches inputs and nothing else.
+        self._take_input = take_input
+        # Our physical address, as the television numbers its ports. Compared against
+        # whatever the bus last announced, to answer "are we what is showing?".
+        self._our_address = our_address
+        # The CEC driver, once running, so the power logic can read what it has heard. Found
+        # among the drivers rather than constructed here, because `tuner` does not know how
+        # to build one.
+        self._cec_driver = None
         # Same arrangement for volume, which is the television's to set and not the player's.
         # Takes a CEC ui-cmd name.
         self._volume = volume
@@ -869,18 +881,40 @@ class Box:
         if self._power_query:
             self._power_query = False
             state = self._television_state()
+            ours = self._screen_is_ours()
+
+            # Four states, three actions. The one that was missing is the second: a
+            # television already on, showing something else, should be *switched to*, not
+            # turned off. Pressing power while watching the Apple TV used to put the set into
+            # standby, which is the opposite of what anyone means by it.
+            #
+            #   set off,  not ours  -> wake, and take the input
+            #   set off,  ours      -> wake, and say so again in case it was forgotten
+            #   set on,   not ours  -> take the input, leave the power alone
+            #   set on,   ours      -> we are what is showing, so turn it off
+            #
+            # "Not answering" counts as on, deliberately: a silent set is far more often on
+            # than in standby, and guessing standby makes the button appear dead at exactly
+            # the moment somebody wants the room quiet.
             if state == "standby":
-                # The set is off and the tuner is not. Wake the picture and leave everything
-                # else exactly as it is — there is nothing to un-sleep.
-                print("  power: the set is in standby — waking it, tuner stays up")
-                self._wake_now()
+                print("  power: set in standby — waking it and taking the input")
+                if self.asleep:
+                    self.toggle_power()      # unsleeps, and re-tunes below
+                else:
+                    self._wake_now()
+                    return
+            elif not ours:
+                owner = self._screen_owner() or "another input"
+                print(f"  power: set is on showing {owner} — taking the input")
+                if self.asleep:
+                    self.toggle_power()
+                else:
+                    self._take_input_now()
+                    return
+            else:
+                print("  power: we are what is showing — sending both to standby")
+                self.toggle_power()
                 return
-            # On, or refusing to answer. Unknown lands here deliberately: a set that will not
-            # answer is far more often on than in standby, and guessing standby would make
-            # the button appear dead at precisely the moment somebody wants the room quiet.
-            print(f"  power: the set reports {state} — sending both to standby")
-            self.toggle_power()
-            return
 
         if self._power is not None:
             try:
@@ -902,6 +936,37 @@ class Box:
             return self._tv_state() or "unknown"
         except Exception:  # noqa: BLE001 - an unanswerable set is not fatal
             return "unknown"
+
+    def _screen_owner(self) -> str | None:
+        """The physical address currently announced as being on screen, if anything has."""
+        driver = self._cec_driver
+        return getattr(driver, "screen_owner", None) if driver else None
+
+    def _screen_is_ours(self) -> bool:
+        """Are we what the television is showing?
+
+        Answered from what the bus has announced rather than by asking, because only the
+        *current* active source replies to a request — so silence cannot be told apart from
+        an active device that does not answer.
+
+        Unknown counts as ours. If nothing has claimed the screen since the box started, the
+        conservative reading is that pressing power means "turn it off", which is what the
+        button did before any of this and what a viewer expects when the television is
+        plainly showing television.
+        """
+        owner = self._screen_owner()
+        if owner is None or self._our_address is None:
+            return True
+        return owner == self._our_address
+
+    def _take_input_now(self) -> None:
+        """Announce ourselves as the active source, without touching the set's power."""
+        if self._take_input is None:
+            return
+        try:
+            self._take_input()
+        except Exception:  # noqa: BLE001 - a television that will not answer is not fatal
+            pass
 
     def _wake_now(self) -> None:
         """Wake the television without touching the box's own power state.
@@ -1128,6 +1193,8 @@ class Box:
         self.tune(self.channel)
 
         for driver in drivers:
+            if getattr(driver, "name", "") == "cec":
+                self._cec_driver = driver
             threading.Thread(target=self._pump, args=(driver,), daemon=True).start()
 
         if self._volume is not None:
