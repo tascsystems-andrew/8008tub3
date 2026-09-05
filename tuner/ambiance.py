@@ -58,7 +58,41 @@ def clips_for(folder: Path | None, when: float | None = None) -> list[Path]:
     # December's fire does not turn up in June.
     skip = {n.lower() for m in range(1, 13)
             for n in (f"{m:02d}", str(m), MONTH_NAMES[m - 1])}
-    return _videos_in(root, skip=skip)
+    general = _videos_in(root, skip=skip)
+    if general:
+        return general
+
+    # Still nothing, so borrow from the nearest month that has something rather than leave
+    # the dial a channel short.
+    #
+    # The channel vanishing is the worse failure. A viewer does not read it as "there is no
+    # September folder", they read it as the box having lost a channel — which is what
+    # happened: August ended, nothing had been put in `09`, and the ambiance channel simply
+    # stopped existing with nothing anywhere saying why.
+    #
+    # Nearest by distance round the year, so October borrows from September before it
+    # borrows from March, and the substitution is at least seasonally adjacent.
+    stamp = datetime.fromtimestamp(time.time() if when is None else when)
+    others = []
+    for month in range(1, 13):
+        if month == stamp.month:
+            continue
+        distance = min((month - stamp.month) % 12, (stamp.month - month) % 12)
+        for name in (f"{month:02d}", str(month), MONTH_NAMES[month - 1],
+                     MONTH_NAMES[month - 1].capitalize(), MONTH_NAMES[month - 1].upper()):
+            candidate = root / name
+            if candidate.is_dir():
+                found = _videos_in(candidate)
+                if found:
+                    others.append((distance, month, found))
+                break
+    if others:
+        others.sort(key=lambda item: (item[0], item[1]))
+        distance, month, found = others[0]
+        print(f"  ambiance: nothing for {MONTH_NAMES[stamp.month - 1]}, "
+              f"using {MONTH_NAMES[month - 1]} ({len(found)} clip(s))")
+        return found
+    return []
 
 
 def _videos_in(folder: Path, *, skip: set[str] | None = None) -> list[Path]:
