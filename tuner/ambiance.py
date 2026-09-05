@@ -51,7 +51,26 @@ DAYPART_WORDS = {
 # Fixed hours rather than real sunrise and sunset. Actual daylight would be more correct in
 # June and December, but it needs a location and an almanac to answer "is it evening", and the
 # whole point of this channel is that it answers instantly and predictably.
-DAYPART_HOURS = ((5, "morning"), (11, "afternoon"), (17, "evening"), (21, "night"))
+#
+# Evening starts at four, not five. Andrew's own calibration: half past four reads as dusk,
+# two o'clock plainly does not. That is generous in June and about right for the darker two
+# thirds of the year, which is when anyone actually wants a candlelit coffee house on.
+DAYPART_HOURS = ((5, "morning"), (11, "afternoon"), (16, "evening"), (21, "night"))
+
+# Which clips suit which hour. Not simply "the matching one": the dark half of the day pools,
+# because a month usually holds exactly one dark clip and splitting dusk from night would
+# leave whichever half missed out with nothing seasonal to play. So a clip named for the night
+# is welcome from four in the afternoon, and a sunset still works at ten.
+#
+# The light half stays strict. That is where the complaint came from — "Paris Balcony Jazz at
+# Night" at two in the afternoon — and morning and afternoon each have enough candidates that
+# borrowing is not needed.
+DAYPART_ELIGIBLE = {
+    "morning": ("morning",),
+    "afternoon": ("afternoon",),
+    "evening": ("evening", "night"),
+    "night": ("night", "evening"),
+}
 
 
 def month_folders(when: float | None = None) -> tuple[str, ...]:
@@ -160,7 +179,8 @@ def for_daypart(clips: list[Path], root: Path, when: float | None = None) -> lis
     if not clips:
         return clips
     now = daypart_at(when)
-    fitting = [c for c in clips if (d := daypart_of(c, root)) is None or d == now]
+    welcome = DAYPART_ELIGIBLE[now]
+    fitting = [c for c in clips if (d := daypart_of(c, root)) is None or d in welcome]
     if not fitting:
         # Every clip this month is pinned to some other hour. Play them all rather than show
         # nothing: wrong time of day is a blemish, an empty channel is a fault.

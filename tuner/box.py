@@ -248,6 +248,9 @@ class Box:
         # differ for as long as a settle window, and after a burst they may turn out to agree
         # — up then down again is a change of mind, not a channel change.
         self._on_air: int | None = None
+        # Which part of the day the ambiance playlist was chosen for, so the loop can notice
+        # the hour moving on underneath a channel nobody has touched since breakfast.
+        self._ambiance_daypart: str | None = None
         self._settle_at = 0.0
         self._tune_seq = 0
         self._tuning = ""
@@ -462,6 +465,8 @@ class Box:
         landing on it should be told where they are in the ordinary way.
         """
         station = self.lineup.get(channel)
+        from .ambiance import daypart_at  # noqa: PLC0415
+        self._ambiance_daypart = daypart_at()
         # Leaving the guide behind, if that is where we came from.
         if self._guide is not None:
             self.player.hide_overlay(overlay_id=4)
@@ -1297,6 +1302,12 @@ class Box:
                     with self._lock:
                         self._rescan()
 
+                # Outside the lock: retuning opens a file, and `tune` is documented as never
+                # running under it.
+                if self._ambiance_stale():
+                    self.tune(self._on_air, announce=False)
+                    continue
+
                 with self._lock:
                     # The bug fades on its own; redraw only on the transition.
                     if self.mode is Mode.WATCH and not self.bug.visible and self.bug.airing:
@@ -1312,6 +1323,25 @@ class Box:
                 self._advance_if_ended()
         except KeyboardInterrupt:
             self.running = False
+
+    def _ambiance_stale(self) -> bool:
+        """True when the ambiance loop was chosen for an hour that has since passed.
+
+        The playlist is picked when you tune, and this is the one channel people leave on for
+        a whole day — so without this, nothing would notice four o'clock arriving and the
+        sunset clip becoming the right one. It was left on all Saturday playing "Paris Balcony
+        Jazz at Night" through breakfast and lunch, which is what prompted any of this.
+
+        Cheap enough to sit on the minute tick: comparing two short strings, and the folder is
+        only re-read on the four transitions a day where the answer actually changed.
+        """
+        if self._on_air is None or self._ambiance_daypart is None:
+            return False
+        station = self.lineup.get(self._on_air)
+        if not getattr(station, "is_ambiance", False):
+            return False
+        from .ambiance import daypart_at  # noqa: PLC0415
+        return daypart_at() != self._ambiance_daypart
 
     def _advance_if_ended(self) -> None:
         """Step to the next plan entry when the current one runs out.
