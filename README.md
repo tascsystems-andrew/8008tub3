@@ -105,6 +105,16 @@ cp lineup.example.json   lineup.json
 `settings.json` is the small stuff — where the programmes are, where the commercials are, ad
 load, cooldown. Most of it is also editable from the web UI at `http://<box>:8008`.
 
+**The ambiance channel** reads `ambiance_dir`, and inside it one folder per month — `09/`,
+`12/`, or `December/`, whichever is easier to remember. Drop a video or two in for the month
+and that is the entire configuration: no catalogue, no schedule, just a playlist on loop, which
+is also why it keeps working when the NAS is busy and the rest of the dial is slow.
+
+A month with nothing of its own borrows from the nearest month that has something. That
+fallback exists because the alternative was worse: August ended, `09/` was empty, and the
+channel simply stopped appearing on the dial with nothing anywhere saying why. An empty folder
+should cost you a seasonal mismatch, not a missing channel.
+
 `lineup.json` is the dial. One entry per channel:
 
 ```json
