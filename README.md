@@ -115,16 +115,35 @@ fallback exists because the alternative was worse: August ended, `09/` was empty
 channel simply stopped appearing on the dial with nothing anywhere saying why. An empty folder
 should cost you a seasonal mismatch, not a missing channel.
 
-**Time of day is read from the name.** A clip called `... at Night` is only offered between
-21:00 and 05:00, `... Morning` or `... Sunrise` between 05:00 and 11:00, `... Sunset` or
-`... Evening` between 17:00 and 21:00. A name that says nothing about the hour is offered
-always, which is the common case and the safe default. Only strong words count — `Rainy Day`
-and `Late Summer Harvest` are about weather and the season, not the clock, so they stay
-unpinned; guessing wrong hides a clip that was fine.
+**Time of day is read from the name.** The day is cut into four:
+
+| | |
+|---|---|
+| morning | 05:00 – 11:00 |
+| afternoon | 11:00 – 16:00 |
+| evening | 16:00 – 21:00 |
+| night | 21:00 – 05:00 |
+
+`... Morning` or `... Sunrise` is offered in the morning. **The dark half pools**: `... Sunset`
+and `... at Night` are both offered from 16:00 right through to 05:00, because a month usually
+holds one dark clip and splitting dusk from night leaves whichever half missed out with nothing
+seasonal on. The light half stays strict. A name that says nothing about the hour is offered
+always, which is the common case and the safe default.
+
+Only whole words count, and only strong ones. `Rainy Day` and `Late Summer Harvest` are about
+weather and the season, not the clock, so they stay unpinned. Matching is by word, not
+substring, so `Knightsbridge`, `fortnight` and `Nightingale` are not the night. A title naming
+two different times — `Sunrise to Sunset` — spans the day and is treated as unpinned rather
+than pinned to whichever word came first.
 
 If the title lies, override it with a folder: `09/evening/whatever.mp4`. A folder is a
-decision, a filename is our guess, and the decision wins. When nothing suits the current
-hour — a month holding one clip that is pinned to the morning — the whole month plays anyway.
+decision, a filename is our guess, and the decision wins. Group folders say a span in one
+go — `daytime/` (or `day/`, `light/`) for morning and afternoon, `dark/` for evening and
+night, `anytime/` for all of it. A clip that arrives as its own folder,
+`09/Paris Balcony Jazz at Night/video.mp4`, is read from the folder name.
+
+When nothing suits the current hour — a month holding one clip pinned to the morning — the
+whole month plays anyway. A wrong hour is a blemish; an empty channel is a fault.
 
 `lineup.json` is the dial. One entry per channel:
 

@@ -23,6 +23,8 @@ seasonally right clip at the wrong hour still beats a channel with nothing on it
 
 from __future__ import annotations
 
+import os
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -45,7 +47,8 @@ DAYPART_WORDS = {
     "morning": ("morning", "sunrise", "dawn", "daybreak"),
     "afternoon": ("afternoon", "midday", "noon"),
     "evening": ("evening", "sunset", "dusk", "twilight", "golden hour"),
-    "night": ("night", "midnight", "candlelit", "candlelight", "moonlit", "starry", "nocturne"),
+    "night": ("night", "midnight", "candlelit", "candlelight", "moonlit", "moonlight",
+              "starry", "nocturne"),
 }
 
 # Fixed hours rather than real sunrise and sunset. Actual daylight would be more correct in
@@ -70,6 +73,21 @@ DAYPART_ELIGIBLE = {
     "afternoon": ("afternoon",),
     "evening": ("evening", "night"),
     "night": ("night", "evening"),
+}
+
+# A clip is not always for one part of the day. "Morning / daytime" is a real instruction and
+# there was no way to say it: the light half had to be spelled as two folders and two copies of
+# the same file. A group folder says it once.
+#
+# Only usable as a folder name, never inferred from a title. `day` in a title is what the
+# vocabulary above deliberately refuses to read, and that judgement does not change just
+# because there is now a group with a similar name.
+DAYPART_GROUPS = {
+    "day": ("morning", "afternoon"),
+    "daytime": ("morning", "afternoon"),
+    "light": ("morning", "afternoon"),
+    "dark": ("evening", "night"),
+    "anytime": DAYPARTS,
 }
 
 
@@ -151,11 +169,12 @@ def daypart_at(when: float | None = None) -> str:
     return current
 
 
-def daypart_of(clip: Path, root: Path) -> str | None:
-    """The part of the day a clip is for, or None if it never says.
+def dayparts_of(clip: Path, root: Path) -> tuple[str, ...]:
+    """The parts of the day a clip is for. Empty means it never says, so it suits all of them.
 
     A folder beats a filename. `09/evening/rain.mp4` is a decision somebody made; a title is a
     guess we are making on their behalf, and the guess should lose when there is a decision.
+    A folder can also name a group — `01/daytime/` — which a title can never do.
     """
     try:
         parents = clip.relative_to(root).parts[:-1]
@@ -163,15 +182,49 @@ def daypart_of(clip: Path, root: Path) -> str | None:
         parents = ()
     for part in parents:
         folder = part.strip().lower()
+        if folder in DAYPART_GROUPS:
+            return DAYPART_GROUPS[folder]
         for daypart, words in DAYPART_WORDS.items():
-            if folder == daypart or folder in words:
-                return daypart
+            if folder in (daypart, f"{daypart}s") or folder in words:
+                return (daypart,)
+            if folder in {f"{word}s" for word in words}:
+                return (daypart,)
+
+    # A video that ships as `Paris Balcony Jazz at Night/video.mp4` carries its title on the
+    # folder, which is the ordinary shape of a rip on a NAS. The exact-match pass above only
+    # sees folders that ARE a daypart word, so read the folder names the same way as a title —
+    # deepest first, because that is the one naming this particular clip.
+    for part in reversed(parents):
+        named = {d for d in DAYPARTS if _names_daypart(d, part.lower())}
+        if len(named) == 1:
+            return (named.pop(),)
 
     name = clip.stem.lower()
-    for daypart in DAYPARTS:                # fixed order, so two markers resolve the same way twice
-        if any(word in name for word in DAYPART_WORDS[daypart]):
-            return daypart
-    return None
+    found = {d for d in DAYPARTS if _names_daypart(d, name)}
+    if len(found) != 1:
+        # Nothing, or two. "Sunrise to Sunset" spans the whole day and belongs to no single
+        # part of it, so treating it as unmarked — eligible always — is right for both cases,
+        # and is better than the old behaviour of silently taking whichever word came first.
+        return ()
+    return (found.pop(),)
+
+
+def _names_daypart(daypart: str, name: str) -> bool:
+    """Whether a lowercased title names this part of the day.
+
+    Whole words, not substrings. "night" lives inside Knightsbridge, fortnight, nightingale
+    and nightshade, and matching those pinned a London rain walk and a birdsong recording to
+    the small hours — hidden for two thirds of the day by a coincidence of spelling. A plain
+    plural is still the same word, so `nocturnes` and `evenings` count.
+    """
+    tokens = set(re.findall(r"[a-z]+", name))
+    for word in DAYPART_WORDS[daypart]:
+        if " " in word:                     # a phrase, so look for it as written
+            if word in name:
+                return True
+        elif word in tokens or f"{word}s" in tokens:
+            return True
+    return False
 
 
 def for_daypart(clips: list[Path], root: Path, when: float | None = None) -> list[Path]:
@@ -179,8 +232,9 @@ def for_daypart(clips: list[Path], root: Path, when: float | None = None) -> lis
     if not clips:
         return clips
     now = daypart_at(when)
-    welcome = DAYPART_ELIGIBLE[now]
-    fitting = [c for c in clips if (d := daypart_of(c, root)) is None or d in welcome]
+    welcome = set(DAYPART_ELIGIBLE[now])
+    fitting = [c for c in clips
+               if not (d := dayparts_of(c, root)) or welcome.intersection(d)]
     if not fitting:
         # Every clip this month is pinned to some other hour. Play them all rather than show
         # nothing: wrong time of day is a blemish, an empty channel is a fault.
@@ -201,12 +255,31 @@ def clips_for(folder: Path | None, when: float | None = None) -> list[Path]:
 
 def _videos_in(folder: Path, *, skip: set[str] | None = None) -> list[Path]:
     lowered = skip or set()
+    found: list[Path] = []
+    seen: set[str] = set()
     try:
-        return sorted(
-            p for p in folder.rglob("*")
-            if p.is_file() and p.suffix.lower() in VIDEO_SUFFIXES
-            and not p.name.startswith(".")
-            and not lowered & {part.lower() for part in p.relative_to(folder).parts[:-1]}
-        )
+        # `os.walk(followlinks=True)`, not `rglob`. Pathlib's `**` silently refuses to descend
+        # into a symlinked directory, so a daypart folder that is a link — the obvious way to
+        # share one clip across months without copying it — would read as empty, and a month
+        # made entirely of links would report itself missing and borrow from another month
+        # while its own clips sat one hop away. The same trap already cost us a pruning pass
+        # that "tested clean and changed nothing".
+        for dirpath, dirnames, filenames in os.walk(folder, followlinks=True):
+            here = Path(dirpath)
+            # Following links means a cycle is possible, and a cycle here is a hung channel.
+            real = os.path.realpath(dirpath)
+            if real in seen:
+                dirnames[:] = []
+                continue
+            seen.add(real)
+            if lowered & {part.lower() for part in here.relative_to(folder).parts}:
+                dirnames[:] = []
+                continue
+            for name in filenames:
+                if name.startswith("."):
+                    continue
+                if Path(name).suffix.lower() in VIDEO_SUFFIXES:
+                    found.append(here / name)
     except OSError:
         return []
+    return sorted(found)
