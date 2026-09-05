@@ -325,6 +325,12 @@ class Box:
     # truth it is just volume moving on its own after the button is up.
     VOLUME_HOLD_GAP = 0.25
 
+    # The longest a volume key is ever held on the bus, regardless of what the remote says.
+    # A held CEC key ramps until it is released, so a release that goes missing leaves the
+    # television running to the end of its range on its own — which it did. Five seconds is
+    # longer than any deliberate hold and short enough that the worst case is survivable.
+    VOLUME_MAX_HOLD = 5.0
+
     # Minimum time between key events while a button is held, and it exists because the
     # television has a queue.
     #
@@ -584,84 +590,91 @@ class Box:
         self._volume_seq += 1
 
     def _volume_worker(self) -> None:
-        """Send volume to the television: a tap is one key event, a hold is a run of them.
+        """Hold the key down while the button is down, and let the television ramp.
 
-        A hold sends bare `<User Control Pressed>` as fast as the bus carries them and one
-        `<User Control Released>` at the end. That is the specification's idiom for a held
-        key, and here it is also the only way to get a usable ramp: a press costs 91ms on
-        the wire and a press-with-release 155ms, and HDMI-CEC is a ~400 bit/s bus, so those
-        numbers are physics rather than implementation. Talking to /dev/cec0 directly by
-        ioctl was measured and is no faster; the tool was never the bottleneck.
+        One press per gesture, not a stream of them. In CEC a follower receiving
+        `<User Control Pressed>` starts repeating the action itself and continues until
+        `<User Control Released>` arrives — so sending presses repeatedly does not step it
+        repeatedly, it keeps *restarting* the repeat, and the volume never stops. Which is
+        what happened: the set ran to the end of its range and stayed there.
 
-        The window is small and not ours to choose. The remote is an ELAN presenter whose
-        dongle releases the key after about 700-900ms whether or not a thumb is still on it,
-        confirmed twice against deliberate five-second holds. Nothing here extrapolates past
-        that: when the remote stops saying the button is down, this stops. It just fills the
-        window it is given at eleven steps a second instead of three.
+        The previous design sent a stream deliberately, and was right about the television it
+        was measured on: the set at the old house ignored held keys and stepped only on a
+        completed press-and-release. This one honours them properly. Tuning to one set and
+        then moving house is how a design becomes wrong without a line of it changing.
 
-        `wire` is the key believed to be down on the bus, and it must be released before any
-        other is pressed — a press left hanging has the set repeating it on its own.
+        Press once, hold while the remote keeps saying so, release when it stops. That is the
+        specification's own idiom; on a set that ramps it is correct, and on a set that does
+        not it degrades to one step per gesture rather than to a runaway.
+
+        `VOLUME_MAX_HOLD` is the backstop. A release that is lost — a busy bus, a crash, a
+        restart mid-gesture — would otherwise leave the set ramping with nothing coming to
+        stop it, and that is the one failure here bad enough to design against twice.
         """
         wire: str | None = None
+        pressed_at = 0.0
 
         def release(reason: str) -> None:
             nonlocal wire
             if wire is None:
                 return
-            try:
-                self._volume("release", wire)
-                if VOLUME_TRACE:
-                    print(f"  vol: -> release ({reason})", flush=True)
-            except Exception:  # noqa: BLE001
-                pass
+            for _ in range(2):
+                # Twice: a lost release is the difference between a volume control and a
+                # runaway, and the message is idempotent.
+                try:
+                    self._volume("release", wire)
+                except Exception:  # noqa: BLE001
+                    pass
+            if VOLUME_TRACE:
+                print(f"  vol: -> release ({reason})", flush=True)
             wire = None
 
-        while self.running:
-            ui_cmd = self._volume_cmd
-            if ui_cmd is None:
-                release("idle")
-                time.sleep(0.02)
-                continue
+        try:
+            while self.running:
+                ui_cmd = self._volume_cmd
+                now = time.monotonic()
 
-            holding = self._volume_holding
-            if holding and time.monotonic() - self._volume_seen > self.VOLUME_HOLD_GAP:
-                # Sequence-guarded, because ending a hold is not instant: the release is
-                # about 90ms on the wire, and a press arriving during it would be recorded
-                # and then wiped by the tidy-up below. That is a ~90ms hole at the end of
-                # every hold, and reversing direction is exactly the thing that lands in it —
-                # "it works if I wait, but not if I go the other way straight after".
-                #
-                # The tap path was guarded against this and this branch was not.
-                seq = self._volume_seq
-                release("button up")
-                if self._volume_seq == seq:
+                if ui_cmd is None:
+                    release("idle")
+                    time.sleep(0.02)
+                    continue
+
+                # Held too long, whatever the remote claims. Never negotiable.
+                if wire is not None and now - pressed_at > self.VOLUME_MAX_HOLD:
+                    release("held too long")
                     self._volume_cmd = None
                     self._volume_holding = False
-                continue
+                    continue
 
-            try:
+                # The remote has gone quiet, so the button is up.
+                if wire is not None and now - self._volume_seen > self.VOLUME_HOLD_GAP:
+                    seq = self._volume_seq
+                    release("button up")
+                    if self._volume_seq == seq:
+                        self._volume_cmd = None
+                        self._volume_holding = False
+                    continue
+
                 if wire is not None and wire != ui_cmd:
                     release("direction changed")
-                seq = self._volume_seq
-                started = time.monotonic()
-                self._volume("press" if holding else "tap", ui_cmd)
-                wire = ui_cmd if holding else None
-                if VOLUME_TRACE:
-                    print(f"  vol: -> {'press' if holding else 'tap'} {ui_cmd} in "
-                          f"{(time.monotonic() - started) * 1000:.0f}ms", flush=True)
-            except Exception as exc:  # noqa: BLE001 - a silent set is not fatal
-                if VOLUME_TRACE:
-                    print(f"  vol: -> {ui_cmd} RAISED {exc}", flush=True)
-                self._volume_cmd = None
-                self._volume_holding = False
-                wire = None
-                continue
 
-            if not holding:
-                # A tap is one step — unless the first repeat landed while it was in flight,
-                # in which case the button is still down and this becomes a hold.
-                if self._volume_seq == seq:
-                    self._volume_cmd = None
+                if wire is None:
+                    try:
+                        self._volume("press", ui_cmd)
+                        wire, pressed_at = ui_cmd, time.monotonic()
+                        if VOLUME_TRACE:
+                            print(f"  vol: -> press {ui_cmd} (held)", flush=True)
+                    except Exception as exc:  # noqa: BLE001
+                        if VOLUME_TRACE:
+                            print(f"  vol: -> {ui_cmd} RAISED {exc}", flush=True)
+                        self._volume_cmd = None
+                        self._volume_holding = False
+
+                time.sleep(0.02)
+        finally:
+            # However this thread ends — shutdown, exception, the box going down — the key
+            # must not be left down on the bus.
+            release("worker stopping")
 
     # ---------- the way back ----------
 
