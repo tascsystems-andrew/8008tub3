@@ -149,7 +149,14 @@ def render_menu_health(verdict: dict) -> str:
         body += f"   (+{len(messages) - 1} more)"
     # Amber for a schedule running down, red for a build that failed outright.
     colour = "&H5A6EFF&" if verdict.get("level") == "fault" else "&H3CB4FF&"
-    body = f"! {body}   ·   boobtube.local:8008"
+    # The box's own name, not a literal — this box answers to `boobtube.local` today, but a
+    # line telling you to visit the wrong host is worse than one telling you nothing.
+    try:
+        import socket  # noqa: PLC0415
+        host = socket.gethostname().split(".")[0] or "boobtube"
+    except Exception:  # noqa: BLE001
+        host = "boobtube"
+    body = f"! {body}   ·   {host}.local:8008"
     body = body.replace("{", "(").replace("}", ")").replace("\\", "/")
     return (
         r"{\an8\pos(960,26)\fnMonospace\fs28\b1\bord0\shad3"
@@ -278,6 +285,9 @@ class Box:
         # Which part of the day the ambiance playlist was chosen for, so the loop can notice
         # the hour moving on underneath a channel nobody has touched since breakfast.
         self._ambiance_daypart: str | None = None
+        # The health verdict, refreshed on the run loop's own tick. Never computed while
+        # drawing: see `_refresh_health`.
+        self._health: dict = {}
         self._settle_at = 0.0
         self._tune_seq = 0
         self._tuning = ""
@@ -829,7 +839,7 @@ class Box:
         self._guide = None
         self._guide_ass = None
         self._looping = False
-        for overlay in (1, 2, 3, 4):
+        for overlay in (1, 2, 3, 4, 5):
             self.player.hide_overlay(overlay_id=overlay)
         self.player.stop()
 
@@ -1114,18 +1124,29 @@ class Box:
 
     # ---------- drawing ----------
 
-    def _draw_health(self) -> None:
-        """Put the health line up, or take it down. Never let it break the menu.
+    def _refresh_health(self) -> None:
+        """Recompute the health verdict, on the run loop and never while drawing.
 
-        Cached inside `health.check`, so this costs a dictionary lookup on every redraw and a
-        database read at most once a minute.
+        This forks `systemctl` and opens the schedule database. The first version called it
+        from `_draw_health`, which runs on the input thread under the box lock — so opening
+        the menu on a cold cache could block every button on the remote behind a subprocess
+        with an eight-second timeout. Drawing now only reads what this leaves behind.
         """
         try:
             from tub3.health import check  # noqa: PLC0415 - keeps the desktop import light
-            verdict = check()
-            line = render_menu_health(verdict) if verdict.get("level") != "ok" else ""
-        except Exception:  # noqa: BLE001 - a health check must never cost you the menu
-            line = ""
+            self._health = check()
+        except Exception:  # noqa: BLE001 - health must never cost you the box
+            self._health = {}
+
+    def _draw_health(self) -> None:
+        """Put the health line up, or take it down. A dictionary lookup, nothing more."""
+        verdict = self._health or {}
+        line = ""
+        if verdict.get("level") not in (None, "ok"):
+            try:
+                line = render_menu_health(verdict)
+            except Exception:  # noqa: BLE001 - a health line must never cost you the menu
+                line = ""
         if line:
             self.player.show_overlay(line, overlay_id=5)
         else:
@@ -1347,6 +1368,8 @@ class Box:
                     self._rescanned_at = now
                     with self._lock:
                         self._rescan()
+
+                    self._refresh_health()
 
                 # Outside the lock: retuning opens a file, and `tune` is documented as never
                 # running under it.

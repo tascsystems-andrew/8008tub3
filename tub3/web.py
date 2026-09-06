@@ -581,6 +581,7 @@ PAGE = """<!doctype html>
 <script>
 const $=s=>document.querySelector(s);
 let LOADS={};
+let LOWMARK=4;   // replaced by the server's own alert threshold on first poll
 let HOURS={};
 
 const COLS=6;                       // half-hour columns, three hours across
@@ -601,8 +602,12 @@ async function drawGuide(){
   html += '</tr>';
   for(const row of g.rows){
     const left = HOURS[row.name];
-    const warn = (left!==undefined && left<6) ? ' class=warn' : '';
-    const tag  = left!==undefined ? `<div class=tag${warn}>${left}h left</div>` : '';
+    // `class=tag${warn}` emitted two class attributes and browsers keep the first, so the
+    // amber never rendered — the flag has been silently dead. And the threshold is the
+    // server's, not a hardcoded 6: the banner above quoted one number while the row below
+    // flagged at another.
+    const warn = (left!==undefined && left < LOWMARK) ? ' warn' : '';
+    const tag  = left!==undefined ? `<div class="tag${warn}">${left}h left</div>` : '';
     html += `<tr><td class=chn><b>${row.number}</b>${row.name}${tag}</td>`;
     html += `<td class=slots colspan=${COLS}><div class=track>`;
     for(const s2 of row.slots){
@@ -629,6 +634,7 @@ async function refresh(){
   drawGuide();
 
   const h = s.health || {level:'ok', messages:[]};
+  if(h.alert_hours) LOWMARK = h.alert_hours;
   const banner = $('#health');
   banner.className = 'banner' + (h.level === 'ok' ? '' : ' ' + h.level);
   banner.innerHTML = h.level === 'ok' ? '' :

@@ -35,24 +35,47 @@ BUILD_UNIT = "tub3-build.service"
 VENDOR = Path(__file__).resolve().parent.parent / "vendor" / "FieldStation42"
 DB = VENDOR / "runtime" / "fs42_fluid.db"
 
-# Matches `tub3.supervisor.LOW_WATER_HOURS`. Imported lazily rather than referenced directly so
-# that this module stays importable on a desktop, where the supervisor's dependencies are not
-# installed and health is still worth reporting.
-DEFAULT_LOW_WATER_HOURS = 12.0
+# **Not** the supervisor's `LOW_WATER_HOURS`, and that is the whole point.
+#
+# 12h is the supervisor's *control* threshold: the level at which it decides to work. A healthy
+# box sawtooths 60h -> 12h -> 60h by design, and the timer only runs every six hours, so
+# crossing 12h is the normal expected state of a working appliance. Alerting on it meant a
+# perfectly well box showing an amber banner for hours every other day — and an alert that
+# fires during normal operation is one you learn to ignore, which is worse than no alert.
+#
+# Four hours is a third of the way to actually running dry, well below anywhere the supervisor
+# is content to leave things, and still a comfortable margin before a channel goes off air.
+ALERT_HOURS = 4.0
 
 # systemd is cheap but not free, and the box asks for this on a timer. Nothing here changes
 # faster than a build, which is every six hours.
 TTL = 60.0
 
-_cache: tuple[float, dict] | None = None
+# Two caches, not one. A single shared cache meant `health(channels)` returned whatever
+# `check()` had computed from its own database read, ignoring the very list it was handed —
+# so the settings page could print a banner about a starving channel directly above a grid
+# showing that channel healthy, from one response. What is actually expensive is the systemd
+# subprocess, so that is what gets cached; folding an already-fetched channel list into a
+# verdict is arithmetic and runs fresh every time.
+_build_cache: tuple[float, dict] | None = None
+_check_cache: tuple[float, dict] | None = None
 
 
-def _low_water() -> float:
+def configured_stations() -> set[str]:
+    """The stations that ought to have a schedule, from the configs.
+
+    Deliberately not `SELECT DISTINCT station FROM liquid_blocks`. `GROUP BY` cannot return a
+    row for a station that has none, so reading the schedule to decide which stations exist
+    makes a *completely* starved channel invisible — the single failure this module was
+    written to catch. `supervisor.expected` already says exactly this, twenty lines from here.
+
+    Empty means "cannot tell", and every caller treats that as unknown rather than as healthy.
+    """
     try:
-        from .supervisor import LOW_WATER_HOURS  # noqa: PLC0415
-        return float(LOW_WATER_HOURS)
-    except Exception:  # noqa: BLE001 - a desktop without the build venv still reports health
-        return DEFAULT_LOW_WATER_HOURS
+        from .schedules import station_confs  # noqa: PLC0415
+        return {c["network_name"] for c in station_confs() if c.get("network_name")}
+    except Exception:  # noqa: BLE001 - no configs is not a fault, it is no answer
+        return set()
 
 
 def build_state() -> dict:
@@ -61,11 +84,11 @@ def build_state() -> dict:
     `Result` is the honest field: `ActiveState` for a `Type=oneshot` unit reads `inactive`
     whether it succeeded or failed, so asking that would call every failure healthy.
     """
-    state = {"known": False, "failed": False, "result": None,
-             "exit_code": None, "finished": None}
+    state = {"known": False, "failed": False, "missing": False, "running": False,
+             "result": None, "exit_code": None, "finished": None}
     try:
         out = subprocess.run(
-            ["systemctl", "show", BUILD_UNIT, "-p", "LoadState",
+            ["systemctl", "show", BUILD_UNIT, "-p", "LoadState", "-p", "ActiveState",
              "-p", "Result", "-p", "ExecMainStatus", "-p", "ExecMainExitTimestamp"],
             capture_output=True, text=True, timeout=8,
         )
@@ -80,11 +103,21 @@ def build_state() -> dict:
         fields[key.strip()] = value.strip()
 
     # A unit that does not exist answers `Result=success` with exit 0, so asking only about
-    # the result would call a build unit that had been renamed or removed perfectly healthy —
-    # silence for the one reason nobody would ever think to check. LoadState is what knows.
-    if fields.get("LoadState") != "loaded":
-        state["result"] = fields.get("LoadState") or "not-loaded"
+    # the result would call a build unit that had been renamed or removed perfectly healthy.
+    # LoadState is what knows — and this has to *raise* a fault, not merely record one. The
+    # first version of this branch noted the condition and returned `failed=False`, which made
+    # the guard a no-op for the exact case its own comment said it existed to catch: a removed
+    # build unit read as permanently well, and nothing would ever run again.
+    load = fields.get("LoadState")
+    if load != "loaded":
+        state["result"] = load or "not-loaded"
+        state["missing"] = True
+        state["failed"] = True
         return state
+
+    # A `Type=oneshot` unit is "activating" for as long as it runs. Worth knowing, because a
+    # build in flight has legitimately torn down part of the schedule it is rebuilding.
+    state["running"] = fields.get("ActiveState") in ("activating", "active", "reloading")
 
     result = fields.get("Result") or None
     if result is None:
@@ -150,36 +183,83 @@ def schedule_hours(db: Path | None = None) -> list[dict]:
 
 
 def assess(channels: list[dict], build: dict | None = None,
-           low_water: float | None = None) -> dict:
-    """Fold the build result and the channel schedules into one verdict."""
-    build = build_state() if build is None else build
-    mark = _low_water() if low_water is None else low_water
+           alert_hours: float | None = None,
+           stations: set[str] | None = None) -> dict:
+    """Fold the build result and the schedules into one verdict.
 
-    low = []
+    Two rules earned the hard way.
+
+    **The station list comes from the configs**, not from the schedule. A station with no
+    blocks cannot appear in a `GROUP BY` over the schedule, so reading the schedule to decide
+    which stations exist hides a completely starved channel — the one failure worth catching.
+
+    **Starvation outranks a failed build.** A build failure is loud and recoverable: the timer
+    runs again in six hours and the schedule on disk keeps playing. A channel running out is
+    what actually takes the dial off air. Ranking them the other way put a red banner over a
+    transient failure on a full dial and only an amber one over a dial about to go dark.
+    """
+    build = build_state() if build is None else build
+    mark = ALERT_HOURS if alert_hours is None else alert_hours
+    expected = configured_stations() if stations is None else stations
+
+    seen = {}
     for entry in channels or []:
+        name = entry.get("station")
+        if name is not None:
+            seen[name] = entry
+
+    # Orphans — in the schedule but no longer configured — are deliberately not alerted on.
+    # No build will ever top one up, because the supervisor only knows about configured
+    # stations, so its rows sit in the past forever at 0.0h. That is a warning no action can
+    # clear, and because the list sorts worst-first it would monopolise the box's single line
+    # and hide every real problem behind it.
+    orphans = sorted(set(seen) - expected) if expected else []
+    watched = sorted(expected) if expected else sorted(seen)
+
+    low, unknown = [], []
+    for name in watched:
+        entry = seen.get(name)
+        if entry is None:
+            low.append({"station": name, "hours": 0.0, "reason": "no schedule at all"})
+            continue
         hours = entry.get("schedule_hours_left")
-        if hours is None:                     # a channel with no schedule at all
-            if entry.get("blocks"):
-                continue
-            low.append({"station": entry.get("station", "?"), "hours": 0.0})
+        if hours is None:
+            # A row exists but its end time could not be read. Say so rather than guessing
+            # either way — silently skipping it reports a starving channel as healthy.
+            unknown.append(name)
         elif hours < mark:
-            low.append({"station": entry.get("station", "?"), "hours": hours})
-    low.sort(key=lambda item: item["hours"])
+            low.append({"station": name, "hours": hours, "reason": "low"})
+    low.sort(key=lambda item: (item["hours"], item["station"]))
 
     messages = []
-    if build.get("failed"):
-        code = build.get("exit_code")
-        detail = f"{build.get('result')}" + (f", exit {code}" if code else "")
-        messages.append(f"The last schedule build failed ({detail}).")
-    for item in low:
+    if build.get("missing"):
         messages.append(
-            f"{item['station']} has {item['hours']:.1f}h of schedule left, "
-            f"under the {mark:.0f}h mark."
+            f"The schedule build unit is {build.get('result')} — no build will ever run."
         )
+    elif build.get("failed"):
+        code = build.get("exit_code")
+        detail = str(build.get("result")) + (f", exit {code}" if code else "")
+        messages.append(f"The last schedule build failed ({detail}).")
 
-    if build.get("failed"):
+    # A build in flight has legitimately cleared part of what it is rebuilding, so the horizon
+    # dips below the mark every time one runs. Warning then is warning about the fix.
+    building = bool(build.get("running"))
+    if low and not building:
+        for item in low:
+            if item["reason"] == "no schedule at all":
+                messages.append(f"{item['station']} has no schedule at all.")
+            else:
+                messages.append(
+                    f"{item['station']} has {item['hours']:.1f}h of schedule left, "
+                    f"under the {mark:.0f}h mark."
+                )
+    for name in unknown:
+        messages.append(f"{name} has a schedule that cannot be read.")
+
+    starving = bool(low) and not building
+    if starving or build.get("missing"):
         level = "fault"
-    elif low:
+    elif build.get("failed") or unknown:
         level = "warning"
     else:
         level = "ok"
@@ -188,32 +268,43 @@ def assess(channels: list[dict], build: dict | None = None,
         "level": level,
         "messages": messages,
         "build": build,
-        "low_channels": low,
-        "low_water_hours": mark,
+        "low_channels": [] if building else low,
+        "orphans": orphans,
+        "unknown": unknown,
+        "building": building,
+        "alert_hours": mark,
+        "low_water_hours": mark,      # kept: the settings page reads this name
         "checked_at": time.time(),
     }
+
+
+def cached_build_state(*, force: bool = False) -> dict:
+    """`build_state`, cached — the one genuinely expensive call in this module."""
+    global _build_cache
+    now = time.time()
+    if not force and _build_cache is not None and now - _build_cache[0] < TTL:
+        return _build_cache[1]
+    state = build_state()
+    _build_cache = (now, state)
+    return state
+
+
+def health(channels: list[dict], *, force: bool = False) -> dict:
+    """A verdict about *these* channels. Never served from a cache of other channels."""
+    return assess(channels, build=cached_build_state(force=force))
 
 
 def check(*, force: bool = False) -> dict:
     """Health without being handed anything — reads the schedule database itself.
 
-    Consults the cache *before* touching the database, not after. Written the other way round
-    this opened and queried sqlite on every call and then threw the answer away, which on the
-    tuner would mean a database read every time the menu redrew.
+    Consults the cache before touching the database, not after. Written the other way round
+    it opened and queried sqlite on every call and then threw the answer away, which on the
+    tuner meant a database read every time the menu redrew.
     """
-    global _cache
+    global _check_cache
     now = time.time()
-    if not force and _cache is not None and now - _cache[0] < TTL:
-        return _cache[1]
-    return health(schedule_hours(), force=True)
-
-
-def health(channels: list[dict], *, force: bool = False) -> dict:
-    """`assess`, cached, because the box asks on a timer and systemd is a subprocess."""
-    global _cache
-    now = time.time()
-    if not force and _cache is not None and now - _cache[0] < TTL:
-        return _cache[1]
-    verdict = assess(channels)
-    _cache = (now, verdict)
+    if not force and _check_cache is not None and now - _check_cache[0] < TTL:
+        return _check_cache[1]
+    verdict = assess(schedule_hours(), build=cached_build_state(force=force))
+    _check_cache = (now, verdict)
     return verdict
