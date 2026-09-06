@@ -52,6 +52,13 @@ EPISODE_SIZE = 24
 CHAR_W = 0.6                # monospace advance as a fraction of the point size
 NAME_SIZE = 30              # the station name in the left column
 
+# The header. Sized to the 300px band it already occupied: at 54 and 30 it left a wide empty
+# strip between the date and the time columns, on the one screen where the furniture should be
+# the easiest thing in the room to read.
+NETWORK_SIZE = 88
+DATE_SIZE = 40
+SLOT_SIZE = 42
+
 AUDIO_SUFFIXES = {".mp3", ".m4a", ".flac", ".ogg", ".opus", ".wav", ".aac", ".wma"}
 
 # Layout, in the 1920x1080 space the overlay declares.
@@ -422,11 +429,11 @@ class Guide:
         name_lines = self._wrap(row.name, name_chars)
         if len(name_lines) == 1:
             events.append(self._text(96, y + ROW_H / 2 - 2, name_lines[0],
-                                     size=NAME_SIZE, colour=PURPLE, dy=dy, dur=dur))
+                                     size=NAME_SIZE, colour=GOLD, dy=dy, dur=dur))
         else:
             for n, line in enumerate(name_lines):
                 events.append(self._text(96, y + 34 + n * 30, line,
-                                         size=NAME_SIZE, colour=PURPLE, dy=dy, dur=dur))
+                                         size=NAME_SIZE, colour=GOLD, dy=dy, dur=dur))
 
         if row.number == self.guide_channel:
             events.append(self._text(LEFT_W + 20, y + ROW_H / 2 - 12,
@@ -473,20 +480,20 @@ class Guide:
         events = [self._rect(0, 0, width, HEADER_H, "&H120E0B&")]
 
         stamp = datetime.fromtimestamp(now)
-        events.append(self._text(36, 56, self.network, size=54, bold=1, colour=GOLD))
-        events.append(self._text(36, 122, stamp.strftime("%A %-d %B"),
-                                 size=30, colour=DIM))
-        events.append(self._text(width - 36, 56, stamp.strftime("%-I:%M %p"),
-                                 size=54, align=6, bold=1, colour=PURPLE))
+        events.append(self._text(36, 70, self.network, size=NETWORK_SIZE, bold=1, colour=GOLD))
+        events.append(self._text(36, 152, stamp.strftime("%A %-d %B"),
+                                 size=DATE_SIZE, colour=DIM))
+        events.append(self._text(width - 36, 70, stamp.strftime("%-I:%M %p"),
+                                 size=NETWORK_SIZE, align=6, bold=1, colour=PURPLE))
 
-        # Column headings, on the half hour.
+        # Column headings, on the half hour. The band grew with the type inside it.
         for column in range(COLUMNS):
             slot_time = datetime.fromtimestamp(begin + column * 1800)
             x = LEFT_W + column * COL_W
-            events.append(self._rect(x + 3, HEADER_H - 54, x + COL_W - 3, HEADER_H - 6,
+            events.append(self._rect(x + 3, HEADER_H - 72, x + COL_W - 3, HEADER_H - 6,
                                      "&H2A2118&"))
-            events.append(self._text(x + 16, HEADER_H - 30,
-                                     slot_time.strftime("%-I:%M"), size=30,
+            events.append(self._text(x + 16, HEADER_H - 39,
+                                     slot_time.strftime("%-I:%M"), size=SLOT_SIZE,
                                      colour=GOLD, bold=1))
         events.append(self._rect(0, HEADER_H - 6, width, HEADER_H, PURPLE))
         return events
