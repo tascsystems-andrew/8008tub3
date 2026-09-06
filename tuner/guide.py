@@ -51,6 +51,7 @@ SHOW_SIZE = 32
 EPISODE_SIZE = 24
 CHAR_W = 0.6                # monospace advance as a fraction of the point size
 NAME_SIZE = 30              # the station name in the left column
+NUM_W = 90                  # the channel number's own sub-column, centred within it
 
 # The header. Sized to the 300px band it already occupied: at 54 and 30 it left a wide empty
 # strip between the date and the time columns, on the one screen where the furniture should be
@@ -420,8 +421,11 @@ class Guide:
 
         # Channel number and name, in the fixed left column.
         events.append(self._rect(0, y, LEFT_W - 6, y + ROW_H - 4, "&H2A2118&", dy=dy, dur=dur))
-        events.append(self._text(24, y + ROW_H / 2 - 14, f"{row.number}",
-                                 size=44, colour=GOLD, bold=1, dy=dy, dur=dur))
+        # Centred in its own sub-column and on the same line as the name. Left-aligned, a
+        # single digit started where the first of two digits did, so 3 sat visibly left of 15
+        # down the column; and it was drawn twelve pixels above the name it belongs to.
+        events.append(self._text(NUM_W / 2, y + ROW_H / 2 - 2, f"{row.number}",
+                                 size=44, align=5, colour=GOLD, bold=1, dy=dy, dur=dur))
         # Wrapped to the column, not truncated at a fixed 16 characters. At the old size
         # "THE GOOD LIFE" and "BOOBTUBE BROADCASTING CORPORATION" ran straight out of the
         # left column and over the first programme of the row.
@@ -432,7 +436,7 @@ class Guide:
                                      size=NAME_SIZE, colour=GOLD, dy=dy, dur=dur))
         else:
             for n, line in enumerate(name_lines):
-                events.append(self._text(96, y + 34 + n * 30, line,
+                events.append(self._text(96, y + ROW_H / 2 - 17 + n * 32, line,
                                          size=NAME_SIZE, colour=GOLD, dy=dy, dur=dur))
 
         if row.number == self.guide_channel:
