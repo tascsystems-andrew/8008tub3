@@ -422,11 +422,11 @@ class Guide:
         name_lines = self._wrap(row.name, name_chars)
         if len(name_lines) == 1:
             events.append(self._text(96, y + ROW_H / 2 - 2, name_lines[0],
-                                     size=NAME_SIZE, colour=PHOSPHOR, dy=dy, dur=dur))
+                                     size=NAME_SIZE, colour=PURPLE, dy=dy, dur=dur))
         else:
             for n, line in enumerate(name_lines):
                 events.append(self._text(96, y + 34 + n * 30, line,
-                                         size=NAME_SIZE, colour=PHOSPHOR, dy=dy, dur=dur))
+                                         size=NAME_SIZE, colour=PURPLE, dy=dy, dur=dur))
 
         if row.number == self.guide_channel:
             events.append(self._text(LEFT_W + 20, y + ROW_H / 2 - 12,
@@ -477,7 +477,7 @@ class Guide:
         events.append(self._text(36, 122, stamp.strftime("%A %-d %B"),
                                  size=30, colour=DIM))
         events.append(self._text(width - 36, 56, stamp.strftime("%-I:%M %p"),
-                                 size=54, align=6, bold=1, colour=PHOSPHOR))
+                                 size=54, align=6, bold=1, colour=PURPLE))
 
         # Column headings, on the half hour.
         for column in range(COLUMNS):
