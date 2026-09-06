@@ -92,6 +92,10 @@ class PlexEpisode:
     # free — the same response already contains it — and because probing for it later is the
     # most expensive single thing a schedule build does.
     seconds: float = 0.0
+    # Plex's own id for the episode. Same reasoning as `seconds`: the response already
+    # carries it, and it is the only handle an app has for asking Plex to play this — a file
+    # path means nothing to an iPad.
+    rating_key: str = ""
 
 
 class PlexError(RuntimeError):
@@ -266,6 +270,7 @@ class Plex:
                         episode=int(number) if (number or "").isdigit() else None,
                         path=path,
                         seconds=seconds,
+                        rating_key=node.get("ratingKey") or "",
                     ))
         return out
 

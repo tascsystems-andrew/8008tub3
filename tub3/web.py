@@ -974,6 +974,27 @@ class Handler(BaseHTTPRequestHandler):
                 },
             })
             return
+        if path == "/api/tv/channels":
+            from .tvapi import channels  # noqa: PLC0415
+            self._json({"channels": channels()})
+            return
+
+        if path.startswith("/api/tv/") and path.endswith("/now"):
+            from . import plexmap  # noqa: PLC0415
+            from .tvapi import now  # noqa: PLC0415
+            try:
+                number = int(path.split("/")[3])
+            except (IndexError, ValueError):
+                self.send_error(404)
+                return
+            # The map takes a minute to crawl, so it is never built on a request. A first
+            # call with no map answers honestly with `plex: null` and starts one; by the
+            # next poll the answer is complete.
+            if plexmap.load() is None:
+                plexmap.build_in_background()
+            self._json(now(number))
+            return
+
         self.send_error(404)
 
     def do_POST(self) -> None:  # noqa: N802
