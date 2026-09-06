@@ -54,12 +54,16 @@ def plex_durations() -> dict[str, float]:
     for item in client.library():
         # Films carry their length on the item; episodes need the series walked.
         if item.kind == "movie":
-            for path in item.paths:
-                # `seconds`, never `minutes`: the latter is rounded to a tenth of a minute
-                # for display, which is a six-second grid and useless for a short clip.
-                seconds = item.seconds if item.seconds is not None else (item.minutes or 0) * 60.0
+            # Per *part*, not per item. Plex files alternate versions of a film under one
+            # item, and the item's own duration describes only the primary one — seeding
+            # every version with it books a 79-minute cut for 115 minutes. `seconds`, never
+            # `minutes`: the latter is rounded to a tenth of a minute for display, which is a
+            # six-second grid and useless for a short clip.
+            fallback = item.seconds if item.seconds is not None else (item.minutes or 0) * 60.0
+            for part in item.parts:
+                seconds = part.seconds or fallback
                 if seconds > 0:
-                    out[os.path.basename(path)] = seconds
+                    out[os.path.basename(part.path)] = seconds
             continue
         for episode in client.episodes_of(item):
             if episode.path and getattr(episode, "seconds", 0):

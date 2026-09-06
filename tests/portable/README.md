@@ -11,6 +11,8 @@ answer with numbers.
 | `catdiff.py`  | would a Plex-backed catalogue hand the scheduler the same entries? |
 | `plexdur.py`  | run a real build with durations from Plex and nothing else changed |
 | `blockdiff.py`| diff two builds block for block |
+| `versions.py` | does the map address the right *version* of a film? |
+| `identity.py` | does Plex serve the version the map named? checked by id, not by a 200 |
 
 ## Running a build without touching the live one
 
@@ -31,3 +33,14 @@ Pre-flight it before running anything:
 
 and keep an `md5sum` of the live database either side. Build `nice -n 19`; the box is a
 television and someone is probably watching it.
+
+## Why `identity.py` checks an id and not a status code
+
+Plex's transcode endpoints do not validate `mediaIndex` the way you would hope. An
+out-of-range value is a 400, but a missing, negative or non-numeric one answers **200 and
+quietly serves version 0** — which is indistinguishable from a correct request for a
+single-version film. So a green request proves nothing. The check that discriminates is to
+resolve a known second-version file, ask Plex to decide with the index the map gave, and
+assert the `Media id` that comes back is the one the map named. Ids are stable; the index is
+positional and Plex orders versions by resolution, so importing a better copy re-seats index
+0 onto a different file and every stored index shifts.

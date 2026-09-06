@@ -64,6 +64,27 @@ RATING_MAP = {
 
 
 @dataclass
+class PlexPart:
+    """One playable file under an item, and which of Plex's versions it is.
+
+    Plex groups alternate versions of a film — a 1080p rip and a 720p one — under a single
+    `ratingKey`, and `mediaIndex` is how a client says which it wants. Flattening them into a
+    bare list of paths loses that, and the loss is silent: every file resolves to version 0,
+    so the second version plays the first one's bytes at the second one's offsets.
+    """
+
+    path: str
+    media_index: int = 0
+    part_index: int = 0
+    seconds: float = 0.0
+    # Plex's own id for this version. The transcode API will not accept it — it honours only
+    # the positional `mediaIndex` — but the position is ordered by resolution, so importing a
+    # better version re-seats index 0 onto a different file and every stored index shifts.
+    # The id does not move, which makes it the only way to tell a stale map from a good one.
+    media_id: str = ""
+
+
+@dataclass
 class PlexItem:
     title: str
     kind: str                       # "show" | "movie"
@@ -71,7 +92,11 @@ class PlexItem:
     content_rating: str | None      # what Plex actually said, for the audit trail
     year: int | None
     genres: list[str] = field(default_factory=list)
+    # `paths` is every file under the item, flat, and is what the rating lookup wants: it asks
+    # "which item is this file", and every version answers the same. `parts` is the same files
+    # with the version each belongs to, for the questions where that matters.
     paths: list[str] = field(default_factory=list)
+    parts: list[PlexPart] = field(default_factory=list)
     episodes: int = 0
     # `minutes` is for display and is rounded to a tenth of one, which is a six-second
     # grid. That is invisible on a film and ruinous on a four-second bumper, so anything
@@ -106,6 +131,11 @@ class PlexEpisode:
     # You": asking for the ratingKey and taking media 0 plays the wrong file, for the wrong
     # length, and both look like Plex being wrong about durations.
     media_index: int = 0
+    # Which file within that version, for a programme stacked across two files. Zero for every
+    # item in the library this was written against; carried because an out-of-range partIndex
+    # does not error, it silently serves part 0 — the same bug one level down.
+    part_index: int = 0
+    media_id: str = ""
 
 
 class PlexError(RuntimeError):
@@ -160,14 +190,17 @@ class Plex:
         # network, carrying a library listing.
         self._ctx = None if verify_tls else ssl._create_unverified_context()
 
-    def _get(self, path: str, **params) -> ET.Element:
+    def _get(self, endpoint: str, **params) -> ET.Element:
+        # `endpoint`, not `path`: Plex's transcode endpoints take a query parameter literally
+        # called `path`, and a positional of that name makes it unreachable through **params
+        # — `_get("/video/:/transcode/universal/decision", path=...)` raises TypeError.
         # The token is optional. Plex servers commonly allow unauthenticated access from
         # the local network, and this one does — so the box asks for nothing it does not
         # need. A credential you never collect is a credential you cannot mishandle.
         if self._token:
             params["X-Plex-Token"] = self._token
         query = urllib.parse.urlencode(params)
-        url = f"{self.base_url}{path}?{query}"
+        url = f"{self.base_url}{endpoint}?{query}"
         request = urllib.request.Request(url, headers={"Accept": "application/xml"})
         try:
             with urllib.request.urlopen(request, timeout=TIMEOUT,
@@ -222,8 +255,27 @@ class Plex:
             seconds = round(int(duration) / 1000.0, 3) if duration else None
             minutes = round(seconds / 60.0, 1) if seconds else None
 
-            paths = [part.get("file") for media in node.findall("Media")
-                     for part in media.findall("Part") if part.get("file")]
+            # Walked the same way `episodes_of` walks an episode, and for the same reason:
+            # the node's own duration describes the *primary* version, so it is only right
+            # when there is one. Prefer the Part's own length, then the Media's, and fall
+            # back to the node only when Plex omits both.
+            parts: list[PlexPart] = []
+            for media_index, media in enumerate(node.findall("Media")):
+                for part_index, part in enumerate(media.findall("Part")):
+                    file = part.get("file")
+                    if not file:
+                        continue
+                    millis = part.get("duration") or media.get("duration")
+                    parts.append(PlexPart(
+                        path=file,
+                        media_index=media_index,
+                        part_index=part_index,
+                        media_id=media.get("id") or "",
+                        seconds=(float(millis) / 1000.0
+                                 if (millis or "").isdigit() else (seconds or 0.0)),
+                    ))
+
+            paths = [part.path for part in parts]
             # A show's own element carries no Part; its location is a directory instead.
             paths += [loc.get("path") for loc in node.findall("Location") if loc.get("path")]
 
@@ -235,6 +287,7 @@ class Plex:
                 year=int(node.get("year")) if (node.get("year") or "").isdigit() else None,
                 genres=[g.get("tag") for g in node.findall("Genre") if g.get("tag")],
                 paths=[p for p in paths if p],
+                parts=parts,
                 episodes=int(node.get("leafCount") or 0) or (1 if node.tag == "Video" else 0),
                 minutes=minutes,
                 seconds=seconds,
@@ -272,7 +325,7 @@ class Plex:
             millis = node.get("duration")
             fallback = float(millis) / 1000.0 if (millis or "").isdigit() else 0.0
             for media_index, media in enumerate(node.findall("Media")):
-                for part in media.findall("Part"):
+                for part_index, part in enumerate(media.findall("Part")):
                     path = part.get("file")
                     if not path:
                         continue
@@ -288,6 +341,8 @@ class Plex:
                         seconds=seconds,
                         rating_key=node.get("ratingKey") or "",
                         media_index=media_index,
+                        part_index=part_index,
+                        media_id=media.get("id") or "",
                     ))
         return out
 

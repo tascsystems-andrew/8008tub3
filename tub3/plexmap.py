@@ -33,17 +33,37 @@ MAP_FILE = HERE / "runtime" / "plexmap.json"
 # hammering Plex with a full crawl.
 MAX_AGE = 86400.0
 
+# Bumped whenever the *meaning* of an entry changes, not its shape. Version 2 attaches the
+# real `media_index` to a film rather than always 0, so a map built before it is not merely
+# old, it is wrong — and nothing here rebuilds an old map, it only marks it stale and hands
+# it over. An unrecognised version therefore reads as no map at all, which is the one state
+# the box already knows how to repair: `web.py` starts a rebuild and says so meanwhile.
+FORMAT = 2
+
 _lock = threading.Lock()
 _cache: dict | None = None
 _building = False
+# A map we have already looked at and refused, by (mtime, size). Without this, a map of the
+# wrong format is re-read and re-parsed on every call — eight megabytes of JSON per poll
+# for the whole minute a rebuild takes, to reach the same conclusion each time.
+_refused: tuple | None = None
 
 
 def _load() -> dict | None:
+    global _refused
+    try:
+        stat = MAP_FILE.stat()
+    except OSError:
+        return None
+    ident = (stat.st_mtime, stat.st_size)
+    if _refused == ident:
+        return None
     try:
         data = json.loads(MAP_FILE.read_text())
     except (OSError, json.JSONDecodeError):
         return None
-    if not isinstance(data, dict) or "keys" not in data:
+    if not isinstance(data, dict) or "keys" not in data or data.get("format") != FORMAT:
+        _refused = ident
         return None
     return data
 
@@ -75,6 +95,45 @@ def _seconds(item: "plexmod.PlexItem") -> float:
     return round((item.minutes or 0) * 60.0, 2)
 
 
+def _part_index(items: list) -> tuple[dict[str, tuple], set[str]]:
+    """Path tail -> (media_index, seconds, part_index, media_id), movie files only.
+
+    `path_index` answers "which item is this", which is what the safety audit needs and what
+    every version of a film answers identically. A player needs the other question — "which
+    *file* is this" — and that one has a different answer per version.
+
+    Deliberately supplies values only; it never decides which keys exist. `path_index` deletes
+    a key it cannot resolve because there the fallback is stricter — a film with no Plex match
+    is rated by its folder name, which defaults to adult. Here there is no such fallback:
+    `resolve` returning None makes the app say "Plex cannot identify this file" and play
+    nothing, while the box itself plays the right file. So a tail two different files both
+    claim loses its *value* and falls back to the item-level answer, and the key survives.
+    """
+    index: dict[str, tuple] = {}
+    claimed: dict[str, str] = {}
+    ambiguous: set[str] = set()
+
+    for item in items:
+        if item.kind != "movie":
+            continue
+        for part in item.parts:
+            for key in plexmod._suffixes(Path(part.path)):
+                staked = claimed.get(key)
+                if staked is not None and staked != part.path:
+                    ambiguous.add(key)
+                    continue
+                claimed[key] = part.path
+                # setdefault, so if Plex ever lists one file under two Media — an optimised
+                # copy pointed back at the original — the lower index wins rather than the
+                # last one seen.
+                index.setdefault(key, (part.media_index, round(part.seconds or 0.0, 2),
+                                       part.part_index, part.media_id))
+
+    for key in ambiguous:
+        index.pop(key, None)
+    return index, ambiguous
+
+
 def build() -> dict:
     """Crawl Plex and write the map. Slow on purpose; call it off the request path."""
     client = plexmod.from_config()
@@ -96,16 +155,29 @@ def build() -> dict:
     for key, episode in episodes.items():
         if episode.rating_key:
             keys[key] = [episode.rating_key, "episode", round(episode.seconds or 0.0, 2),
-                         episode.media_index]
+                         episode.media_index, episode.part_index, episode.media_id]
+    per_file, unresolved = _part_index(items)
+    # Only the tails that survive `path_index` matter: it has already deleted every tail two
+    # different *films* claim, so what is left here is the case that actually costs something
+    # — a tail known to be one film, but not which of its versions.
+    contested = len(unresolved & set(index))
     for key, item in index.items():
-        if item.rating_key and key not in keys:
-            keys[key] = [item.rating_key, item.kind or "item", _seconds(item), 0]
+        if not item.rating_key or key in keys:
+            continue
+        # A folder tail names an item, not a file, so it keeps the item-level answer. Only a
+        # tail ending in a real file can say which version it is.
+        which = per_file.get(key) if item.kind == "movie" else None
+        if which is not None:
+            keys[key] = [item.rating_key, "movie", which[1], which[0], which[2], which[3]]
+        else:
+            keys[key] = [item.rating_key, item.kind or "item", _seconds(item), 0, 0, ""]
 
     # The keys answer "what is this file called in Plex". `files` answers the opposite
     # question, which a catalogue asks instead: "what does Plex have under this folder".
     # Same crawl, so it costs nothing to write both down.
     files: list[list] = []
     seen_files: set[tuple] = set()
+    seen_paths: set[str] = set()
     for episode in episodes.values():
         ident = (episode.path, episode.media_index)
         if episode.path and ident not in seen_files:
@@ -115,18 +187,26 @@ def build() -> dict:
     for item in items:
         if item.kind != "movie":
             continue
-        for raw in item.paths:
-            ident = (raw, 0)
-            if raw and ident not in seen_files:
-                seen_files.add(ident)
-                files.append([raw, item.rating_key, "movie", _seconds(item), 0])
+        for part in item.parts:
+            # On the path alone, not (path, media_index): a catalogue reads these rows as
+            # "what does Plex have here", so one file listed twice is one film scheduled
+            # twice. Parts arrive in index order, so the survivor is the lower one.
+            if part.path and part.path not in seen_paths:
+                seen_paths.add(part.path)
+                files.append([part.path, item.rating_key, "movie",
+                              round(part.seconds or _seconds(item), 2), part.media_index])
 
     data = {
+        "format": FORMAT,
         "built_at": time.time(),
         "took": round(time.time() - started, 1),
         "server": (plexmod.load_config() or {}).get("url", ""),
         "counts": {"items": len(items), "episodes": len(episodes),
-                   "keys": len(keys), "files": len(files)},
+                   "keys": len(keys), "files": len(files),
+                   # Tails that name one film but cannot say which version, so they fall
+                   # back to the item-level answer. Zero on the library this was written
+                   # against; worth seeing if it is ever not.
+                   "contested": contested},
         "keys": keys,
         "files": files,
     }
@@ -178,7 +258,11 @@ def resolve(path: str | Path, data: dict | None = None) -> dict | None:
     for key in plexmod._episode_keys(real) + plexmod._suffixes(real):
         hit = keys.get(key)
         if hit:
+            # Read by position with a length guard on each: an entry from an older map is
+            # shorter, and a missing field must read as its default rather than raise.
             return {"rating_key": hit[0], "kind": hit[1],
                     "seconds": hit[2] if len(hit) > 2 else 0.0,
-                    "media_index": hit[3] if len(hit) > 3 else 0}
+                    "media_index": hit[3] if len(hit) > 3 else 0,
+                    "part_index": hit[4] if len(hit) > 4 else 0,
+                    "media_id": hit[5] if len(hit) > 5 else ""}
     return None
