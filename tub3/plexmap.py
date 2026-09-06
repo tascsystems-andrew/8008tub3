@@ -77,12 +77,17 @@ def build() -> dict:
 
     keys: dict[str, list] = {}
     # Episodes first, then items, so a film never shadows an episode that shares a tail.
+    #
+    # The duration rides along because Plex already measured it and the ambiance channel
+    # needs it: that channel has no schedule to consult, so where it is in a loop can only
+    # be arithmetic on the clock, and arithmetic needs lengths.
     for key, episode in episodes.items():
         if episode.rating_key:
-            keys[key] = [episode.rating_key, "episode"]
+            keys[key] = [episode.rating_key, "episode", round(episode.seconds or 0.0, 2)]
     for key, item in index.items():
         if item.rating_key and key not in keys:
-            keys[key] = [item.rating_key, item.kind or "item"]
+            seconds = round((item.minutes or 0) * 60.0, 2)
+            keys[key] = [item.rating_key, item.kind or "item", seconds]
 
     data = {
         "built_at": time.time(),
@@ -139,5 +144,6 @@ def resolve(path: str | Path, data: dict | None = None) -> dict | None:
     for key in plexmod._episode_keys(real) + plexmod._suffixes(real):
         hit = keys.get(key)
         if hit:
-            return {"rating_key": hit[0], "kind": hit[1]}
+            return {"rating_key": hit[0], "kind": hit[1],
+                    "seconds": hit[2] if len(hit) > 2 else 0.0}
     return None

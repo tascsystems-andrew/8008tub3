@@ -40,11 +40,23 @@ PAGE = """<!doctype html><html lang=en><head>
  button.on{background:var(--gold);color:#241a06;border-color:var(--gold);font-weight:700}
  button b{color:var(--gold)} button.on b{color:#241a06}
  #msg{padding:8px 12px;color:var(--dim);font-size:12.5px;background:#141210}
+ #guide{position:absolute;inset:0;display:none;overflow:auto;background:#0c0b0a;padding:10px}
+ #guide table{border-collapse:collapse;width:100%;font-size:13px}
+ #guide th{color:var(--gold);text-align:left;font-weight:400;padding:4px 8px;
+           position:sticky;top:0;background:#0c0b0a}
+ #guide td{padding:5px 8px;border-top:1px solid #1e1a16;vertical-align:top}
+ #guide .chn{white-space:nowrap;cursor:pointer}
+ #guide .chn b{color:var(--gold);font-size:16px;margin-right:6px}
+ #guide .chn span{color:var(--purple)}
+ #guide .slot{color:#ddd}
+ #guide .slot i{font-style:normal;color:var(--dim)}
+ #guide .live{color:#fff;font-weight:700}
 </style></head><body>
 <div id=screen>
   <video id=v playsinline controls></video>
   <div id=bug><b id=bugnum></b><span id=bugname></span></div>
   <div id=now></div>
+  <div id=guide></div>
   <div id=tuning>tuning…</div>
 </div>
 <div id=dial></div>
@@ -116,6 +128,25 @@ async function refresh(force){
   try { d = await (await fetch('/api/tv/'+CH+'/now')).json(); }
   catch(e){ $('#msg').textContent='the box is not answering'; timer=setTimeout(()=>refresh(true),5000); return; }
 
+  // The guide is a channel, exactly as it is on the box: tune to it and you get listings,
+  // not a picture. Nothing to resolve and nothing to play.
+  if(d.kind === 'guide'){
+    $('#v').pause();
+    if(hls){ hls.destroy(); hls = null; }
+    current = null;
+    $('#bugnum').textContent = d.channel;
+    $('#bugname').textContent = d.station;
+    $('#now').textContent = '';
+    $('#guide').style.display = 'block';
+    $('#tuning').style.display = 'none';
+    await drawGuide();
+    $('#msg').textContent = 'listings · tap a channel to tune';
+    clearTimeout(timer);
+    timer = setTimeout(()=>refresh(true), 30000);
+    return;
+  }
+  $('#guide').style.display = 'none';
+
   if(d.off_air || !d.now){
     $('#msg').textContent = d.error || 'off air';
     $('#now').textContent = '';
@@ -123,6 +154,7 @@ async function refresh(force){
     timer = setTimeout(()=>refresh(true), 15000);
     return;
   }
+
   const n = d.now;
   $('#bugnum').textContent = d.channel;
   $('#bugname').textContent = d.station;
@@ -148,6 +180,28 @@ async function refresh(force){
   const wait = Math.max(2, (n.remaining_seconds||0)) * 1000 + 900;
   clearTimeout(timer);
   timer = setTimeout(()=>refresh(true), Math.min(wait, 600000));
+}
+
+async function drawGuide(){
+  let g;
+  try { g = await (await fetch('/api/guide')).json(); }
+  catch(e){ $('#guide').innerHTML = '<p>listings unavailable</p>'; return; }
+  const cols = 3, span = 1800;
+  const hhmm = t => new Date(t*1000).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+  let html = '<table><tr><th></th>';
+  for(let i=0;i<cols;i++) html += `<th>${hhmm(g.begin + i*span)}</th>`;
+  html += '</tr>';
+  for(const row of g.rows){
+    html += `<tr><td class=chn onclick="tune(${row.number})">`+
+            `<b>${row.number}</b><span>${row.name}</span></td>`;
+    const cells = row.slots.length ? row.slots.slice(0,4).map(s => {
+      const live = (g.now >= s.start && g.now < s.end) ? ' live' : '';
+      const lead = s.clipped ? '‹ ' : '';
+      return `<span class="slot${live}">${lead}${s.title}</span>`;
+    }).join(' <i>·</i> ') : '<i>off air</i>';
+    html += `<td class=slot colspan=${cols}>${cells}</td></tr>`;
+  }
+  $('#guide').innerHTML = html + '</table>';
 }
 
 function paint(){

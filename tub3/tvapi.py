@@ -21,6 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import plexmap
+from .lineup import AMBIANCE_CHANNEL, GUIDE_CHANNEL
 
 HERE = Path(__file__).resolve().parent.parent
 DB = HERE / "vendor" / "FieldStation42" / "runtime" / "fs42_fluid.db"
@@ -32,14 +33,90 @@ def _epoch(text) -> float:
     return datetime.strptime(str(text).replace("T", " "), "%Y-%m-%d %H:%M:%S").timestamp()
 
 
+def _ambiance_folder() -> Path | None:
+    try:
+        from .web import load_settings  # noqa: PLC0415
+        folder = (load_settings() or {}).get("ambiance_dir")
+        return Path(folder) if folder else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def channels() -> list[dict]:
-    """The dial, from the station configs — the same source the tuner numbers it from."""
+    """The whole dial, not just the scheduled part of it.
+
+    `station_confs` knows only the channels a schedule is built for. The guide and the
+    ambiance loop have no config and no blocks — the tuner constructs both at boot — so a
+    dial built from configs alone silently loses two channels the box plainly has.
+    """
+    out = [{"channel": GUIDE_CHANNEL, "station": "GUIDE", "kind": "guide"}]
     try:
         from .schedules import station_confs  # noqa: PLC0415
-        return [{"channel": c["channel_number"], "station": c["network_name"]}
+        out += [{"channel": c["channel_number"], "station": c["network_name"],
+                 "kind": "scheduled"}
                 for c in station_confs()]
     except Exception:  # noqa: BLE001
-        return []
+        pass
+    folder = _ambiance_folder()
+    if folder is not None:
+        try:
+            from tuner.ambiance import clips_for  # noqa: PLC0415
+            if clips_for(folder):
+                out.append({"channel": AMBIANCE_CHANNEL, "station": "AMBIANCE",
+                            "kind": "ambiance"})
+        except Exception:  # noqa: BLE001
+            pass
+    return sorted(out, key=lambda c: c["channel"])
+
+
+# The ambiance loop is phase-locked to the clock rather than started when you tune in, for the
+# same reason the rest of the dial is: a channel you join should already be running. Two people
+# opening it in different rooms see the same thing, and it survives a restart.
+AMBIANCE_EPOCH = datetime(2020, 1, 1).timestamp()
+
+
+def _ambiance(at: float, mapping: dict | None) -> dict:
+    folder = _ambiance_folder()
+    from tuner.ambiance import clips_for  # noqa: PLC0415
+    clips = clips_for(folder, when=at) if folder else []
+    if not clips:
+        return {"channel": AMBIANCE_CHANNEL, "station": "AMBIANCE", "kind": "ambiance",
+                "off_air": True, "server_time": round(at, 3)}
+
+    resolved = []
+    for clip in clips:
+        hit = plexmap.resolve(clip, mapping)
+        resolved.append((clip, hit, float((hit or {}).get("seconds") or 0.0)))
+
+    total = sum(seconds for _, _, seconds in resolved)
+    if total <= 0:
+        # No durations means no arithmetic. Play the first clip from the top rather than
+        # pretending to know where in a loop we are.
+        clip, hit, _ = resolved[0]
+        return {"channel": AMBIANCE_CHANNEL, "station": "AMBIANCE", "kind": "ambiance",
+                "server_time": round(at, 3),
+                "now": {"content_type": "ambiance", "title": clip.stem, "plex": hit,
+                        "offset_seconds": 0.0, "duration": 0.0, "remaining_seconds": 3600.0}}
+
+    position = (at - AMBIANCE_EPOCH) % total
+    for clip, hit, seconds in resolved:
+        if position < seconds:
+            return {
+                "channel": AMBIANCE_CHANNEL, "station": "AMBIANCE", "kind": "ambiance",
+                "server_time": round(at, 3),
+                "clips": len(resolved),
+                "now": {"content_type": "ambiance", "title": clip.stem, "plex": hit,
+                        "offset_seconds": round(position, 2),
+                        "duration": round(seconds, 2),
+                        "remaining_seconds": round(seconds - position, 2)},
+            }
+        position -= seconds
+    clip, hit, seconds = resolved[-1]     # unreachable except for float drift
+    return {"channel": AMBIANCE_CHANNEL, "station": "AMBIANCE", "kind": "ambiance",
+            "server_time": round(at, 3),
+            "now": {"content_type": "ambiance", "title": clip.stem, "plex": hit,
+                    "offset_seconds": 0.0, "duration": round(seconds, 2),
+                    "remaining_seconds": round(seconds, 2)}}
 
 
 def _entry(item: dict, offset: float, mapping: dict | None) -> dict:
@@ -63,6 +140,14 @@ def _entry(item: dict, offset: float, mapping: dict | None) -> dict:
 def now(channel: int, at: float | None = None) -> dict:
     """What channel `channel` is playing, and how far into it."""
     at = time.time() if at is None else at
+    if channel == GUIDE_CHANNEL:
+        # No media and nothing to resolve: the guide *is* the listings, and the client draws
+        # them from /api/guide. Saying so is the whole answer.
+        return {"channel": GUIDE_CHANNEL, "station": "GUIDE", "kind": "guide",
+                "server_time": round(at, 3)}
+    if channel == AMBIANCE_CHANNEL:
+        return _ambiance(at, plexmap.load())
+
     dial = {c["channel"]: c["station"] for c in channels()}
     station = dial.get(channel)
     if station is None:
