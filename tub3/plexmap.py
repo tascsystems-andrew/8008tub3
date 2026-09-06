@@ -83,11 +83,12 @@ def build() -> dict:
     # be arithmetic on the clock, and arithmetic needs lengths.
     for key, episode in episodes.items():
         if episode.rating_key:
-            keys[key] = [episode.rating_key, "episode", round(episode.seconds or 0.0, 2)]
+            keys[key] = [episode.rating_key, "episode", round(episode.seconds or 0.0, 2),
+                         episode.media_index]
     for key, item in index.items():
         if item.rating_key and key not in keys:
             seconds = round((item.minutes or 0) * 60.0, 2)
-            keys[key] = [item.rating_key, item.kind or "item", seconds]
+            keys[key] = [item.rating_key, item.kind or "item", seconds, 0]
 
     data = {
         "built_at": time.time(),
@@ -145,5 +146,6 @@ def resolve(path: str | Path, data: dict | None = None) -> dict | None:
         hit = keys.get(key)
         if hit:
             return {"rating_key": hit[0], "kind": hit[1],
-                    "seconds": hit[2] if len(hit) > 2 else 0.0}
+                    "seconds": hit[2] if len(hit) > 2 else 0.0,
+                    "media_index": hit[3] if len(hit) > 3 else 0}
     return None

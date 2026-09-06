@@ -86,9 +86,11 @@ function play(url){
   }
 }
 
-function plexParams(ratingKey, offset){
+function plexParams(ratingKey, offset, mediaIndex){
   return new URLSearchParams({
-    path:'/library/metadata/'+ratingKey, mediaIndex:'0', partIndex:'0',
+    // mediaIndex matters: Plex groups alternate versions under one item, so a ratingKey
+    // alone can name two different files of two different lengths.
+    path:'/library/metadata/'+ratingKey, mediaIndex:String(mediaIndex||0), partIndex:'0',
     protocol:'hls', offset:String(Math.max(0,Math.floor(offset))), fastSeek:'1',
     directPlay:'0', directStream:'1', videoQuality:'100', maxVideoBitrate:'20000',
     location:'lan', autoAdjustQuality:'0',
@@ -168,7 +170,7 @@ async function refresh(force){
     $('#msg').textContent = 'Plex cannot identify this file' + (d.map ? '' : ' (map still building)');
   } else if(force || current !== n.plex.rating_key){
     current = n.plex.rating_key;
-    const params = plexParams(n.plex.rating_key, n.offset_seconds);
+    const params = plexParams(n.plex.rating_key, n.offset_seconds, n.plex.media_index);
     await agree(params);
     play(streamUrl(params));
     $('#msg').textContent = 'ch '+d.channel+' · '+n.plex.kind+' '+n.plex.rating_key+

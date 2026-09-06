@@ -96,6 +96,12 @@ class PlexEpisode:
     # carries it, and it is the only handle an app has for asking Plex to play this — a file
     # path means nothing to an iPad.
     rating_key: str = ""
+    # Which of the item's media this file is. Plex groups alternate versions under one
+    # episode — a webisode filed as a second version of the episode it sits beside — and then
+    # a ratingKey alone is ambiguous. `Pokemon S01X01 Pokerap 1.mp4` is Media[1] of "I Choose
+    # You": asking for the ratingKey and taking media 0 plays the wrong file, for the wrong
+    # length, and both look like Plex being wrong about durations.
+    media_index: int = 0
 
 
 class PlexError(RuntimeError):
@@ -254,15 +260,19 @@ class Plex:
             title = node.get("title") or ""
             season = node.get("parentIndex")
             number = node.get("index")
-            # Milliseconds on the Video node, which is where Plex puts the authoritative
-            # length; the Media node repeats it but is absent on some items.
+            # The Video node's duration describes the *primary* version, so it is only
+            # right when there is one. Prefer the Part's own length and fall back to the
+            # Video node when Plex omits it, which it does on some items.
             millis = node.get("duration")
-            seconds = float(millis) / 1000.0 if (millis or "").isdigit() else 0.0
-            for media in node.findall("Media"):
+            fallback = float(millis) / 1000.0 if (millis or "").isdigit() else 0.0
+            for media_index, media in enumerate(node.findall("Media")):
                 for part in media.findall("Part"):
                     path = part.get("file")
                     if not path:
                         continue
+                    part_ms = part.get("duration") or media.get("duration")
+                    seconds = (float(part_ms) / 1000.0
+                               if (part_ms or "").isdigit() else fallback)
                     out.append(PlexEpisode(
                         show=item.title,
                         title=title,
@@ -271,6 +281,7 @@ class Plex:
                         path=path,
                         seconds=seconds,
                         rating_key=node.get("ratingKey") or "",
+                        media_index=media_index,
                     ))
         return out
 
