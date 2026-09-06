@@ -974,6 +974,65 @@ class Handler(BaseHTTPRequestHandler):
                 },
             })
             return
+        if path.startswith("/plex/"):
+            # A relay to Plex, for browsers that are not Safari.
+            #
+            # Safari plays HLS in the media element, which is not subject to CORS, so an iPad
+            # talks to Plex directly and none of this runs. Everything else needs hls.js,
+            # which fetches over XHR — and Plex answers the preflight by echoing the origin
+            # and then serves the GET with `Access-Control-Allow-Origin: https://app.plex.tv`,
+            # so the browser drops it. Same origin is the only way round that.
+            #
+            # Bytes only: no decode, no encode, nothing this box is bad at. It is still a
+            # relay of video through an appliance that would rather not, which is exactly why
+            # the client that matters does not use it.
+            import urllib.error  # noqa: PLC0415
+            import urllib.request  # noqa: PLC0415
+
+            from .plex import load_config  # noqa: PLC0415
+            base = (load_config() or {}).get("url", "")
+            if not base:
+                self.send_error(503, "Plex is not configured")
+                return
+            target = base.rstrip("/") + "/" + path[len("/plex/"):]
+            if urlparse(self.path).query:
+                target += "?" + urlparse(self.path).query
+            try:
+                with urllib.request.urlopen(target, timeout=30) as up:
+                    self.send_response(up.status)
+                    for header in ("Content-Type", "Content-Length", "Cache-Control"):
+                        value = up.headers.get(header)
+                        if value:
+                            self.send_header(header, value)
+                    self.end_headers()
+                    while True:
+                        chunk = up.read(65536)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+            except urllib.error.HTTPError as exc:
+                self.send_error(exc.code, exc.reason)
+            except Exception:  # noqa: BLE001 - a dropped player is not a server fault
+                pass
+            return
+
+        if path == "/tv":
+            from .tvpage import PAGE  # noqa: PLC0415
+            body = PAGE.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if path == "/api/tv/plex":
+            # The address only. There is no token to leak — the box does not keep one, and
+            # the server answers LAN clients without it.
+            from .plex import load_config  # noqa: PLC0415
+            self._json({"url": (load_config() or {}).get("url", "")})
+            return
+
         if path == "/api/tv/channels":
             from .tvapi import channels  # noqa: PLC0415
             self._json({"channels": channels()})
