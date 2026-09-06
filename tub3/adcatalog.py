@@ -122,6 +122,8 @@ class Tub3Catalog(ShowCatalog):
         self._last_bump: datetime.datetime | None = None
         self.bumps_aired = 0
         self.bumps_suppressed = 0
+        # gaps a bumper covered that would otherwise have been a caption
+        self.gaps_identified = 0
         # Built lazily per tag, and before super() like the rest of the instance state,
         # because ShowCatalog.__init__ does the catalog work and may reach the override.
         self._rings: dict[str, Ring | None] = {}
@@ -382,12 +384,52 @@ class Tub3Catalog(ShowCatalog):
             self._note(pick, at, window)
             return pick
 
+        # Nothing in the pool is short enough. Upstream's answer to that is a caption reading
+        # WE WILL RETURN, stretched to cover the gap — and the commercials are the product, so
+        # a caption is the one thing this box should not be showing. The idents are already
+        # catalogued and the shortest is four seconds against a shortest commercial of ten, so
+        # the gaps that defeat the pool are exactly the ones a bumper fits.
+        #
+        # Real television did this. A station with nine seconds to fill ran its own ident, not
+        # a card apologising for itself.
+        ident = self._ident_for_gap(seconds, when)
+        if ident is not None:
+            self.gaps_identified += 1
+            return ident
+
         # Never raise NoFillerContentFound from here on a starved pool: it is a *sibling* of
         # MatchingContentNotFound, not a subclass, so upstream's fill loop does not catch it
         # and the entire schedule build would abort.
         raise MatchingContentNotFound(
             f"No commercial under {seconds}s in tag={tag!r}"
         ) from last_error
+
+    def _ident_for_gap(self, seconds, when):
+        """A bumper short enough for a gap no commercial fits, or None.
+
+        Deliberately not routed through `_bump_is_due`: that governs how often the channel
+        announces itself *around* breaks, which is a question about pacing. This is the last
+        thing standing between a gap and a caption, and the answer to "how often should we
+        show a caption instead of content" is never.
+        """
+        from fs42.catalog import ShowCatalog  # noqa: PLC0415 - for the position constants
+
+        # Every pool, not just the fill one. `find_bump(position=None)` looks only at the bare
+        # `bump-chN` tag, and on this dial that tag is empty — every bumper lives in a `pre/`
+        # or `post/` subfolder, which upstream files under separate keys. Asking for the fill
+        # pool alone was asking the one question with no answer.
+        #
+        # A pre-roll used mid-break is not wrong. It is a station ident either way; only the
+        # placement convention differs, and the alternative on the screen is a caption.
+        for position in (None, ShowCatalog.prebump, ShowCatalog.postbump):
+            try:
+                pick = self.find_bump(seconds, when, position,
+                                      bump_tag=self.config.get("bump_dir"))
+            except (MatchingContentNotFound, NoFillerContentFound, KeyError, TypeError):
+                continue
+            if pick is not None:
+                return pick
+        return None
 
     # ---------- bookkeeping ----------
 
