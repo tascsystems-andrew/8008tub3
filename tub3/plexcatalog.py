@@ -65,14 +65,25 @@ def folder_index(data: dict | None = None) -> dict[str, list[dict]]:
     return index
 
 
-def entries_for(folder: str | Path, index: dict[str, list[dict]] | None = None) -> list[dict]:
+def entries_for(folder: str | Path, index: dict[str, list[dict]] | None = None,
+                excludes: list[str] | None = None) -> list[dict]:
     """The files Plex has under a folder a lineup names.
 
     Deepest tail first, so `TV/Mr. Bean` is preferred over a bare `Mr. Bean` that would also
     match `Kids TV/Mr. Bean`.
+
+    `excludes` are the lineup's own, and they are not optional decoration: they are how a
+    channel says *not that one*. Channel 6 keeps 4K files off a dial that has to decode them
+    on a Pi; channel 7 keeps `song of the south` away from children. A catalogue that ignored
+    them would quietly put both back, and the schedule would look right while being wrong.
     """
     index = folder_index() if index is None else index
     want = Path(str(folder))
+    patterns = [_norm(x) for x in (excludes or []) if x]
+
+    def kept(record: dict) -> bool:
+        haystack = _norm(record["plex_path"])
+        return not any(pattern in haystack for pattern in patterns)
     for depth in (3, 2, 1):
         key = _tail(want, depth)
         if not key:
@@ -81,6 +92,8 @@ def entries_for(folder: str | Path, index: dict[str, list[dict]] | None = None) 
         if records:
             seen: dict[str, dict] = {}
             for record in records:
+                if not kept(record):
+                    continue
                 seen.setdefault(record["plex_path"] + "#" + str(record["media_index"]), record)
             return sorted(seen.values(), key=lambda r: r["plex_path"])
     return []
