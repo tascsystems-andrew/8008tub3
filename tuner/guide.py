@@ -43,6 +43,7 @@ PANEL = "&H1F1A17&"
 DIM = "&H999999&"
 WHITE = "&HFFFFFF&"
 NOW = "&H4646FF&"           # ASS is BGR: RGB(255, 70, 70)
+SEAM = GOLD                 # where the listing loops — the channel numbers' own gold
 
 # The programme name, and the episode under it. Big enough to read from the sofa, which is the
 # only distance this is ever read from.
@@ -354,6 +355,14 @@ class Guide:
         # the rows that will scroll up into view from below during it.
         copies = int((height + travel) // total_h) + 2
         for repeat in range(copies):
+            # Where the listing starts over. Without a mark the dial appears to run 14, 15, 3
+            # as though channel 3 came after 15, and someone scanning for a channel cannot
+            # tell they have already seen the whole dial. A rule rather than a blank row: it
+            # costs four pixels of a gap that was there anyway.
+            seam = HEADER_H - offset + repeat * total_h
+            if seam + ROW_H >= HEADER_H and seam - travel <= height:
+                events.append(self._rect(0, seam - 7, width, seam - 1, SEAM,
+                                         dy=travel, dur=duration))
             for index, row in enumerate(rows):
                 y = HEADER_H + index * ROW_H - offset + repeat * total_h
                 # Skip only what is off-screen for the entire window: already above the
