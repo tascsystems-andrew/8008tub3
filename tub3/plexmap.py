@@ -90,12 +90,35 @@ def build() -> dict:
             seconds = round((item.minutes or 0) * 60.0, 2)
             keys[key] = [item.rating_key, item.kind or "item", seconds, 0]
 
+    # The keys answer "what is this file called in Plex". `files` answers the opposite
+    # question, which a catalogue asks instead: "what does Plex have under this folder".
+    # Same crawl, so it costs nothing to write both down.
+    files: list[list] = []
+    seen_files: set[tuple] = set()
+    for episode in episodes.values():
+        ident = (episode.path, episode.media_index)
+        if episode.path and ident not in seen_files:
+            seen_files.add(ident)
+            files.append([episode.path, episode.rating_key, "episode",
+                          round(episode.seconds or 0.0, 2), episode.media_index])
+    for item in items:
+        if item.kind != "movie":
+            continue
+        for raw in item.paths:
+            ident = (raw, 0)
+            if raw and ident not in seen_files:
+                seen_files.add(ident)
+                files.append([raw, item.rating_key, "movie",
+                              round((item.minutes or 0) * 60.0, 2), 0])
+
     data = {
         "built_at": time.time(),
         "took": round(time.time() - started, 1),
         "server": (plexmod.load_config() or {}).get("url", ""),
-        "counts": {"items": len(items), "episodes": len(episodes), "keys": len(keys)},
+        "counts": {"items": len(items), "episodes": len(episodes),
+                   "keys": len(keys), "files": len(files)},
         "keys": keys,
+        "files": files,
     }
     MAP_FILE.parent.mkdir(parents=True, exist_ok=True)
     tmp = MAP_FILE.with_suffix(".json.tmp")
