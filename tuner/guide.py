@@ -42,6 +42,14 @@ INK = "&H101010&"
 PANEL = "&H1F1A17&"
 DIM = "&H999999&"
 WHITE = "&HFFFFFF&"
+NOW = "&H4646FF&"           # ASS is BGR: RGB(255, 70, 70)
+
+# The programme name, and the episode under it. Big enough to read from the sofa, which is the
+# only distance this is ever read from.
+SHOW_SIZE = 32
+EPISODE_SIZE = 24
+CHAR_W = 0.6                # monospace advance as a fraction of the point size
+NAME_SIZE = 24              # the station name in the left column
 
 AUDIO_SUFFIXES = {".mp3", ".m4a", ".flac", ".ogg", ".opus", ".wav", ".aac", ".wma"}
 
@@ -354,8 +362,35 @@ class Guide:
                     continue
                 events += self._row(row, y, begin, travel, duration)
 
+        # Where "now" falls across the grid. The window always opens on the half hour, so this
+        # sits in the first column and creeps across it as the half hour passes — the one mark
+        # that says how much of what is on you have already missed. Drawn after the rows so it
+        # rides over them, and unanimated, because it marks a time and not a row.
+        now_x = LEFT_W + (now - begin) / 1800.0 * COL_W
+        events.append(self._rect(now_x - 1, HEADER_H, now_x + 2, height, NOW))
+        events.append(self._rect(now_x - 7, HEADER_H, now_x + 8, HEADER_H + 10, NOW))
+
         events += self._header(now, begin)
         return "\n".join(events)
+
+    @staticmethod
+    def _wrap(text: str, chars: int, lines: int = 2) -> list[str]:
+        """Break on spaces to fit a fixed column, at most `lines` of them."""
+        out: list[str] = []
+        current = ""
+        for word in text.split():
+            candidate = f"{current} {word}".strip()
+            if len(candidate) <= chars:
+                current = candidate
+                continue
+            if current:
+                out.append(current)
+            current = word
+            if len(out) == lines:
+                break
+        if current and len(out) < lines:
+            out.append(current)
+        return [line[:chars] for line in out[:lines]] or [text[:chars]]
 
     def _row(self, row: Row, y: float, begin: float,
              dy: float = 0.0, dur: int = 0) -> list[str]:
@@ -367,8 +402,18 @@ class Guide:
         events.append(self._rect(0, y, LEFT_W - 6, y + ROW_H - 4, "&H2A2118&", dy=dy, dur=dur))
         events.append(self._text(24, y + ROW_H / 2 - 14, f"{row.number}",
                                  size=44, colour=GOLD, bold=1, dy=dy, dur=dur))
-        events.append(self._text(96, y + ROW_H / 2 - 12, row.name[:16],
-                                 size=28, colour=PHOSPHOR, dy=dy, dur=dur))
+        # Wrapped to the column, not truncated at a fixed 16 characters. At the old size
+        # "THE GOOD LIFE" and "BOOBTUBE BROADCASTING CORPORATION" ran straight out of the
+        # left column and over the first programme of the row.
+        name_chars = int((LEFT_W - 96 - 12) / (NAME_SIZE * CHAR_W))
+        name_lines = self._wrap(row.name, name_chars)
+        if len(name_lines) == 1:
+            events.append(self._text(96, y + ROW_H / 2 - 2, name_lines[0],
+                                     size=NAME_SIZE, colour=PHOSPHOR, dy=dy, dur=dur))
+        else:
+            for n, line in enumerate(name_lines):
+                events.append(self._text(96, y + 34 + n * 30, line,
+                                         size=NAME_SIZE, colour=PHOSPHOR, dy=dy, dur=dur))
 
         if row.number == self.guide_channel:
             events.append(self._text(LEFT_W + 20, y + ROW_H / 2 - 12,
@@ -391,10 +436,23 @@ class Guide:
             # A programme already running when the window opens keeps its title, marked
             # with a leading arrow — a blank cell on the channel you are watching is the
             # one thing a guide must never show.
-            label = ("< " if slot.clipped(begin) else "") + slot.title
-            room = int((x2 - x1 - 26) / 15)          # monospace at size 26
-            events.append(self._text(x1 + 16, y + ROW_H / 2 - 12, label[:max(4, room)],
-                                     size=26, colour=WHITE, dy=dy, dur=dur))
+            lead = "< " if slot.clipped(begin) else ""
+            # `_title_of` joins them with an em dash. Splitting it back apart is what lets the
+            # episode drop to its own line: on one line the series name ate the cell and the
+            # episode — the part that tells three helpings of the same show apart — was the
+            # half that got truncated away.
+            show, _, episode = slot.title.partition(" — ")
+            fits = lambda size: max(4, int((x2 - x1 - 26) / (size * CHAR_W)))  # noqa: E731
+
+            if episode:
+                events.append(self._text(x1 + 16, y + 34, (lead + show)[:fits(SHOW_SIZE)],
+                                         size=SHOW_SIZE, colour=WHITE, dy=dy, dur=dur))
+                events.append(self._text(x1 + 16, y + 64, episode[:fits(EPISODE_SIZE)],
+                                         size=EPISODE_SIZE, colour=DIM, dy=dy, dur=dur))
+            else:
+                events.append(self._text(x1 + 16, y + ROW_H / 2 - 2,
+                                         (lead + show)[:fits(SHOW_SIZE)],
+                                         size=SHOW_SIZE, colour=WHITE, dy=dy, dur=dur))
         return events
 
     def _header(self, now: float, begin: float) -> list[str]:
