@@ -60,9 +60,13 @@ ROW_H = 96
 # there is a clear band for rows to scroll up behind. The header is drawn last and is opaque,
 # which is what hides them as they leave.
 HEADER_H = 300
+SCREEN_W = 1920           # the overlay's declared space; Guide.RES matches it
 LEFT_W = 400              # the channel column
-COL_W = 490               # each half-hour
 COLUMNS = 3               # 90 minutes
+# Derived, not fixed, so the columns always reach the right edge. Fixed at 490 they stopped
+# 50px short and left a dead strip down the side of the screen; widening the channel column
+# for the larger station names would have made that strip wider still.
+COL_W = (SCREEN_W - LEFT_W) / COLUMNS
 SCROLL_PX_PER_SEC = 22.0  # slow on purpose
 
 
