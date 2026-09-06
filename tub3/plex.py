@@ -73,7 +73,11 @@ class PlexItem:
     genres: list[str] = field(default_factory=list)
     paths: list[str] = field(default_factory=list)
     episodes: int = 0
+    # `minutes` is for display and is rounded to a tenth of one, which is a six-second
+    # grid. That is invisible on a film and ruinous on a four-second bumper, so anything
+    # doing arithmetic wants `seconds`, which is what Plex actually said.
     minutes: float | None = None
+    seconds: float | None = None
     section: str = ""
     # Plex's own id for the item, needed to ask it for the episodes underneath a show.
     rating_key: str = ""
@@ -215,7 +219,8 @@ class Plex:
             content_rating = node.get("contentRating")
             rating, _why = classify_rating(content_rating)
             duration = node.get("duration")
-            minutes = round(int(duration) / 60000.0, 1) if duration else None
+            seconds = round(int(duration) / 1000.0, 3) if duration else None
+            minutes = round(seconds / 60.0, 1) if seconds else None
 
             paths = [part.get("file") for media in node.findall("Media")
                      for part in media.findall("Part") if part.get("file")]
@@ -232,6 +237,7 @@ class Plex:
                 paths=[p for p in paths if p],
                 episodes=int(node.get("leafCount") or 0) or (1 if node.tag == "Video" else 0),
                 minutes=minutes,
+                seconds=seconds,
                 section=section_title,
                 rating_key=node.get("ratingKey") or "",
             ))

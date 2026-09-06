@@ -63,6 +63,18 @@ def load(*, max_age: float = MAX_AGE) -> dict | None:
     return data
 
 
+def _seconds(item: "plexmod.PlexItem") -> float:
+    """Exact length, never the rounded-for-display minutes.
+
+    `minutes` is quantised to a tenth of a minute. Reconstructing seconds from it snaps
+    everything to a six-second grid, which turned a 4.0s bumper into a 6.0s one and so
+    made it too long for every gap it was meant to fill.
+    """
+    if item.seconds is not None:
+        return round(item.seconds, 2)
+    return round((item.minutes or 0) * 60.0, 2)
+
+
 def build() -> dict:
     """Crawl Plex and write the map. Slow on purpose; call it off the request path."""
     client = plexmod.from_config()
@@ -87,8 +99,7 @@ def build() -> dict:
                          episode.media_index]
     for key, item in index.items():
         if item.rating_key and key not in keys:
-            seconds = round((item.minutes or 0) * 60.0, 2)
-            keys[key] = [item.rating_key, item.kind or "item", seconds, 0]
+            keys[key] = [item.rating_key, item.kind or "item", _seconds(item), 0]
 
     # The keys answer "what is this file called in Plex". `files` answers the opposite
     # question, which a catalogue asks instead: "what does Plex have under this folder".
@@ -108,8 +119,7 @@ def build() -> dict:
             ident = (raw, 0)
             if raw and ident not in seen_files:
                 seen_files.add(ident)
-                files.append([raw, item.rating_key, "movie",
-                              round((item.minutes or 0) * 60.0, 2), 0])
+                files.append([raw, item.rating_key, "movie", _seconds(item), 0])
 
     data = {
         "built_at": time.time(),

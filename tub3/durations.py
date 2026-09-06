@@ -55,7 +55,9 @@ def plex_durations() -> dict[str, float]:
         # Films carry their length on the item; episodes need the series walked.
         if item.kind == "movie":
             for path in item.paths:
-                seconds = (item.minutes or 0) * 60.0
+                # `seconds`, never `minutes`: the latter is rounded to a tenth of a minute
+                # for display, which is a six-second grid and useless for a short clip.
+                seconds = item.seconds if item.seconds is not None else (item.minutes or 0) * 60.0
                 if seconds > 0:
                     out[os.path.basename(path)] = seconds
             continue
