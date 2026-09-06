@@ -123,6 +123,10 @@ def _entry(item: dict, offset: float, mapping: dict | None) -> dict:
     """One plan entry, as the app needs it."""
     path = item.get("path") or ""
     hit = plexmap.resolve(path, mapping) if path else None
+    # The map says which version of a film this is, and Plex may have re-ordered them since.
+    # Checked here rather than in `resolve` because this is the answer that gets *played* —
+    # the same map is read by tools and tests that have no business making Plex requests.
+    hit = plexmap.verify(hit, mapping) if hit else None
     duration = float(item.get("duration") or 0)
     # `skip` is how far into the file this entry starts — a programme split around an ad break
     # resumes partway in, and an app that ignored it would replay the first half.

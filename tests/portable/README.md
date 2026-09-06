@@ -13,6 +13,7 @@ answer with numbers.
 | `blockdiff.py`| diff two builds block for block |
 | `versions.py` | does the map address the right *version* of a film? |
 | `identity.py` | does Plex serve the version the map named? checked by id, not by a 200 |
+| `tripwire.py` | does the staleness check survive a film with two versions, and a Plex that is down? |
 
 ## Running a build without touching the live one
 

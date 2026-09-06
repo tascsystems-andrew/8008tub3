@@ -60,9 +60,25 @@ def _load() -> dict | None:
         return None
     try:
         data = json.loads(MAP_FILE.read_text())
-    except (OSError, json.JSONDecodeError):
+    except OSError:
+        return None
+    except json.JSONDecodeError:
+        # A half-written map — the Pi is a television and gets switched off at the wall.
+        # Remembered like any other refusal, or it is re-read and re-parsed on every poll
+        # until the rebuild lands. The memo is keyed on (mtime, size), so the replacement
+        # is picked up the moment it appears.
+        _refused = ident
         return None
     if not isinstance(data, dict) or "keys" not in data or data.get("format") != FORMAT:
+        _refused = ident
+        return None
+    # Every rating key in the map belongs to the server that was crawled. Pointed at a
+    # different one, they are somebody else's ids: the request either 404s into a black
+    # screen or, if that server happens to reuse the number, plays a different film under
+    # the right title. The settings page can change the address without touching the map,
+    # so the map has to notice by itself.
+    server = (plexmod.load_config() or {}).get("url", "")
+    if server and data.get("server") and data["server"] != server:
         _refused = ident
         return None
     return data
@@ -134,6 +150,41 @@ def _part_index(items: list) -> tuple[dict[str, tuple], set[str]]:
     return index, ambiguous
 
 
+def _previous_size() -> int:
+    """How many keys the map being replaced had, whatever format it was in.
+
+    Read raw rather than through `_load`, because the point is to compare against whatever is
+    on disk — including a map this version would otherwise refuse.
+    """
+    try:
+        return int(json.loads(MAP_FILE.read_text())["counts"]["keys"])
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return 0
+
+
+def _guessed_at(items: list, index: dict, per_file: dict) -> int:
+    """How many films the map can find but cannot say which version of.
+
+    Counted in *files*, not path tails, because a tail is not the unit anyone cares about: two
+    versions in same-named folders under different roots contest their depth-2 tail while both
+    still resolve correctly on their depth-3 one, and counting tails calls that a problem. A
+    file is only guessed at when `path_index` can place it but none of its own tails survived
+    to say which version it is — and then it is served as version 0 with the item's duration,
+    which is the original bug, narrowed rather than gone.
+    """
+    guessed = 0
+    for item in items:
+        if item.kind != "movie":
+            continue
+        for part in item.parts:
+            tails = plexmod._suffixes(Path(part.path))
+            if any(tail in per_file for tail in tails):
+                continue
+            if any(tail in index for tail in tails):
+                guessed += 1
+    return guessed
+
+
 def build() -> dict:
     """Crawl Plex and write the map. Slow on purpose; call it off the request path."""
     client = plexmod.from_config()
@@ -156,11 +207,8 @@ def build() -> dict:
         if episode.rating_key:
             keys[key] = [episode.rating_key, "episode", round(episode.seconds or 0.0, 2),
                          episode.media_index, episode.part_index, episode.media_id]
-    per_file, unresolved = _part_index(items)
-    # Only the tails that survive `path_index` matter: it has already deleted every tail two
-    # different *films* claim, so what is left here is the case that actually costs something
-    # — a tail known to be one film, but not which of its versions.
-    contested = len(unresolved & set(index))
+    per_file, _unresolved = _part_index(items)
+    contested = _guessed_at(items, index, per_file)
     for key, item in index.items():
         if not item.rating_key or key in keys:
             continue
@@ -177,11 +225,15 @@ def build() -> dict:
     # Same crawl, so it costs nothing to write both down.
     files: list[list] = []
     seen_files: set[tuple] = set()
+    # Paths claimed by any row, of either kind. A file Plex holds in both a TV section and a
+    # Movies section would otherwise be emitted twice, and a catalogue reading these rows as
+    # "what does Plex have here" would schedule it twice.
     seen_paths: set[str] = set()
     for episode in episodes.values():
         ident = (episode.path, episode.media_index)
         if episode.path and ident not in seen_files:
             seen_files.add(ident)
+            seen_paths.add(episode.path)
             files.append([episode.path, episode.rating_key, "episode",
                           round(episode.seconds or 0.0, 2), episode.media_index])
     for item in items:
@@ -194,7 +246,7 @@ def build() -> dict:
             if part.path and part.path not in seen_paths:
                 seen_paths.add(part.path)
                 files.append([part.path, item.rating_key, "movie",
-                              round(part.seconds or _seconds(item), 2), part.media_index])
+                              round(part.seconds, 2), part.media_index])
 
     data = {
         "format": FORMAT,
@@ -203,16 +255,34 @@ def build() -> dict:
         "server": (plexmod.load_config() or {}).get("url", ""),
         "counts": {"items": len(items), "episodes": len(episodes),
                    "keys": len(keys), "files": len(files),
-                   # Tails that name one film but cannot say which version, so they fall
-                   # back to the item-level answer. Zero on the library this was written
-                   # against; worth seeing if it is ever not.
-                   "contested": contested},
+                   # Films the map can find but cannot say which version of, so they are
+                   # served as version 0 with the item's duration. Zero on the library this
+                   # was written against; worth seeing if it is ever not, because nothing
+                   # downstream can detect one — a guessed entry carries no media id, and
+                   # every identity check treats a missing id as nothing to check.
+                   "guessed": contested},
         "keys": keys,
         "files": files,
     }
+    # A crawl can succeed and still be wrong. A section whose storage is not mounted yet
+    # answers 200 with nothing in it, contributes no items, and raises nothing — so a Pi that
+    # reboots alongside its NAS can write a map missing every film. That map is well-formed,
+    # so it would be accepted from then on, and the whole library would look like a permanent
+    # Plex fault while the box carried on playing the files perfectly.
+    before = _previous_size()
+    if before and len(keys) < before // 2:
+        raise plexmod.PlexError(
+            f"Plex answered with {len(keys)} keys where the last crawl found {before}. "
+            "Keeping the existing map; this usually means a library was still mounting. "
+            "Delete runtime/plexmap.json if the library really did shrink."
+        )
+
     MAP_FILE.parent.mkdir(parents=True, exist_ok=True)
     tmp = MAP_FILE.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data))
+    with open(tmp, "w") as handle:
+        json.dump(data, handle)
+        handle.flush()
+        os.fsync(handle.fileno())  # or the rename can land before the bytes do
     tmp.replace(MAP_FILE)          # atomic: a reader never sees half a map
 
     global _cache
@@ -242,6 +312,109 @@ def build_in_background() -> bool:
 
     threading.Thread(target=run, daemon=True).start()
     return True
+
+
+# How long a Plex lookup may hold up an answer about what is on. The map's own answer is
+# already good enough to play; this only makes it righter, so it must never be the reason a
+# channel is slow to tune.
+VERIFY_TIMEOUT = 4.0
+
+# Don't rebuild a map that was just built. A version Plex no longer has at all would otherwise
+# ask for a rebuild, get a map that still cannot place it, and ask again.
+REBUILD_MIN_AGE = 300.0
+
+# How long to stop asking after Plex fails to answer. A failure cannot be cached the way an
+# answer can — the server will come back, and the question is still worth asking then — but
+# without a pause each poll pays the timeout twice, once for what is on and once for what is
+# next, on every tune and every programme boundary. Checking is an improvement on an answer
+# the map can already give, so when it is not working it gets out of the way.
+VERIFY_RETRY = 60.0
+_verify_pause_until = 0.0
+
+# One entry per item, holding *every* version's position — never one entry per item holding a
+# single position. A rating key is exactly the thing that carries more than one version, which
+# is the premise of this whole file: a cache that remembered only "item 5295 is at index 0"
+# would answer that for version 1 as well, decide the map's correct index was wrong, and
+# rewrite it to the other version — the check producing the very fault it exists to catch, and
+# stamping it `corrected` on the way out. Holding the whole set costs one request either way.
+_verified: dict[str, dict[str, int]] = {}
+_verified_for: float = -1.0
+
+
+def _media_indexes(rating_key: str) -> dict[str, int] | None:
+    """Where Plex keeps each of that item's versions right now, by media id.
+
+    None means the server could not be asked, which is not the same as an answer: treating an
+    unreachable Plex as an out-of-date map would rebuild the whole thing every time it went
+    out for lunch. An id simply missing from the returned dict is a real answer — that version
+    is gone.
+    """
+    client = plexmod.from_config()
+    if client is None:
+        return None
+    try:
+        root = client._get("/library/metadata/" + str(rating_key), timeout=VERIFY_TIMEOUT)
+    except Exception:      # noqa: BLE001 - an unreachable server must not fail the answer
+        return None
+    return {media.get("id"): index
+            for index, media in enumerate(root.iter("Media")) if media.get("id")}
+
+
+def verify(hit: dict | None, data: dict | None = None) -> dict | None:
+    """Is that version still where the map says it is? Correct it now if not.
+
+    `mediaIndex` is positional and Plex orders a film's versions by resolution, so importing a
+    better copy re-seats index 0 onto a different file and shifts every index above it. The
+    map is rebuilt daily at most, and Plex does not object in the meantime: a wrong index
+    answers 200 and serves whatever is at that position. The Media id does not move, which is
+    the whole reason it is stored.
+
+    Costs one Plex request per item per map build, cached, and only for entries that carry an
+    id. It never raises and never turns a hit into a miss — if Plex cannot be reached the
+    map's own answer stands, because the wrong version is still a picture and None is not.
+    """
+    want = (hit or {}).get("media_id")
+    rating_key = (hit or {}).get("rating_key")
+    if not want or not rating_key:
+        return hit
+
+    data = load() if data is None else data
+    built = float((data or {}).get("built_at") or 0)
+
+    global _verified, _verified_for, _verify_pause_until
+    now = time.time()
+    with _lock:
+        if built != _verified_for:
+            _verified = {}
+            _verified_for = built
+        places = _verified.get(rating_key)
+        paused = now < _verify_pause_until
+
+    if places is None:
+        if paused:
+            return hit                      # Plex is not answering; the map's word stands
+        places = _media_indexes(rating_key)
+        if places is None:
+            with _lock:
+                _verify_pause_until = time.time() + VERIFY_RETRY
+            return hit                      # not cached as an answer: only the asking pauses
+        with _lock:
+            _verified[rating_key] = places
+
+    found = places.get(want, -1)
+    if found == hit.get("media_index", 0):
+        return hit
+
+    # The map is out of date about this item. Rebuild it, but answer this request now — the
+    # rebuild takes over a minute and the viewer is waiting on a picture.
+    if time.time() - built > REBUILD_MIN_AGE:
+        build_in_background()
+    if found < 0:
+        return hit                          # Plex no longer has it; nothing better to offer
+    corrected = dict(hit)
+    corrected["media_index"] = found
+    corrected["corrected"] = True
+    return corrected
 
 
 def resolve(path: str | Path, data: dict | None = None) -> dict | None:

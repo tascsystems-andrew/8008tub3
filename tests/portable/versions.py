@@ -69,7 +69,7 @@ def main() -> int:
     if not data:
         raise SystemExit("no map to test")
 
-    behind = wrong_version = wrong_duration = wrong_id = 0
+    behind = wrong_version = wrong_duration = wrong_id = unverifiable = 0
     examples: list[tuple] = []
     for real, station in catalog:
         hit = plexmap.resolve(real, data)
@@ -88,9 +88,15 @@ def main() -> int:
         # what a stale map looks like, and Plex will not report it — a wrong index answers
         # 200 and serves version 0.
         bad_id = bool(want["media_id"]) and hit.get("media_id") not in ("", want["media_id"])
+        # An entry with no id is not a pass, it is a file the map could not tell apart from
+        # its own alternate version and served as version 0. Nothing else can see that: the
+        # id is the only handle an identity check has, and a missing one has nothing to
+        # check. It is the narrowed remainder of the bug, so it gets counted.
+        blind = not hit.get("media_id")
         wrong_version += bad_index
         wrong_duration += bad_length
         wrong_id += bad_id
+        unverifiable += blind
         if bad_index or bad_length:
             examples.append((station, os.path.basename(real), hit.get("media_index"),
                              want["media_index"], hit.get("seconds") or 0.0,
@@ -102,10 +108,11 @@ def main() -> int:
     print("  addressed as the WRONG version     : %d" % wrong_version)
     print("  carrying the WRONG duration        : %d" % wrong_duration)
     print("  naming the WRONG Plex media id     : %d" % wrong_id)
+    print("  carrying NO media id to check      : %d" % unverifiable)
     for station, name, got, want, got_s, want_s in examples[:15]:
         print("     %-14s %-44s index %s->%s  %8.1f -> %8.1f"
               % (station, name[:44], got, want, got_s, want_s))
-    return 0 if not (wrong_version or wrong_duration or wrong_id) else 1
+    return 0 if not (wrong_version or wrong_duration or wrong_id or unverifiable) else 1
 
 
 if __name__ == "__main__":

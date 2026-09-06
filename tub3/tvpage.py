@@ -171,20 +171,30 @@ async function refresh(force){
   // same stream on every poll would restart it every few seconds.
   const key = n.plex ? n.plex.rating_key+'@'+Math.floor(n.offset_seconds/5) : null;
   if(!n.plex){
-    $('#msg').textContent = 'Plex cannot identify this file' + (d.map ? '' : ' (map still building)');
+    const building = !d.map || d.map.stale;
+    $('#msg').textContent = 'Plex cannot identify this file' +
+                            (building ? ' (map still building)' : '');
   } else if(force || current !== n.plex.rating_key){
     current = n.plex.rating_key;
     const params = plexParams(n.plex.rating_key, n.offset_seconds, n.plex.media_index,
                               n.plex.part_index);
     await agree(params);
     play(streamUrl(params));
+    // `corrected` means the box caught its own map out: Plex had re-ordered this film's
+    // versions since the map was built, so the stored index pointed at the wrong one. It has
+    // been fixed for this request and a rebuild is under way. Worth showing rather than
+    // hiding — it is the one failure Plex itself will never report.
     $('#msg').textContent = 'ch '+d.channel+' · '+n.plex.kind+' '+n.plex.rating_key+
-                            ' · from '+Math.round(n.offset_seconds)+'s';
+                            ' · from '+Math.round(n.offset_seconds)+'s' +
+                            (n.plex.corrected ? ' · version re-checked' : '');
   }
   $('#tuning').style.display='none';
 
-  // Come back when this item ends, and a beat after, so the next one has been written.
-  const wait = Math.max(2, (n.remaining_seconds||0)) * 1000 + 900;
+  // Come back when this item ends, and a beat after, so the next one has been written —
+  // unless there was no Plex answer at all, which usually means the map is being rebuilt.
+  // That takes about a minute, and waiting out the whole programme to find out would leave
+  // the screen dark for the rest of it.
+  const wait = n.plex ? Math.max(2, (n.remaining_seconds||0)) * 1000 + 900 : 10000;
   clearTimeout(timer);
   timer = setTimeout(()=>refresh(true), Math.min(wait, 600000));
 }

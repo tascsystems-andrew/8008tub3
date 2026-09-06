@@ -1049,7 +1049,14 @@ class Handler(BaseHTTPRequestHandler):
             # The map takes a minute to crawl, so it is never built on a request. A first
             # call with no map answers honestly with `plex: null` and starts one; by the
             # next poll the answer is complete.
-            if plexmap.load() is None:
+            #
+            # Stale counts as a reason. `load` marks a map older than a day and hands it over
+            # anyway, and for a long time nothing acted on that — so a map was built once and
+            # then kept forever, and every episode Sonarr landed afterwards was a file the app
+            # could not identify. The box played it correctly the whole time, which is exactly
+            # why nobody noticed.
+            mapping = plexmap.load()
+            if mapping is None or mapping.get("stale"):
                 plexmap.build_in_background()
             self._json(now(number))
             return

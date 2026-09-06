@@ -142,6 +142,20 @@ class PlexError(RuntimeError):
     pass
 
 
+def _length(*millis: str | None) -> float:
+    """The first duration Plex actually gives, in seconds. 0.0 when it gives none.
+
+    A literal `duration="0"` has to count as *no* answer, not as a length: the obvious
+    `part.get("duration") or media.get("duration")` short-circuits on it, because "0" is a
+    perfectly truthy string, and the ladder that exists to find a real number stops on the
+    one value that is not one.
+    """
+    for value in millis:
+        if (value or "").isdigit() and int(value) > 0:
+            return int(value) / 1000.0
+    return 0.0
+
+
 def load_config() -> dict:
     """Server address and token, written by the settings page. Never logged."""
     try:
@@ -190,7 +204,7 @@ class Plex:
         # network, carrying a library listing.
         self._ctx = None if verify_tls else ssl._create_unverified_context()
 
-    def _get(self, endpoint: str, **params) -> ET.Element:
+    def _get(self, endpoint: str, *, timeout: float | None = None, **params) -> ET.Element:
         # `endpoint`, not `path`: Plex's transcode endpoints take a query parameter literally
         # called `path`, and a positional of that name makes it unreachable through **params
         # — `_get("/video/:/transcode/universal/decision", path=...)` raises TypeError.
@@ -203,7 +217,7 @@ class Plex:
         url = f"{self.base_url}{endpoint}?{query}"
         request = urllib.request.Request(url, headers={"Accept": "application/xml"})
         try:
-            with urllib.request.urlopen(request, timeout=TIMEOUT,
+            with urllib.request.urlopen(request, timeout=timeout or TIMEOUT,
                                         context=self._ctx) as response:
                 return ET.fromstring(response.read())
         except urllib.error.HTTPError as exc:
@@ -255,24 +269,26 @@ class Plex:
             seconds = round(int(duration) / 1000.0, 3) if duration else None
             minutes = round(seconds / 60.0, 1) if seconds else None
 
-            # Walked the same way `episodes_of` walks an episode, and for the same reason:
-            # the node's own duration describes the *primary* version, so it is only right
-            # when there is one. Prefer the Part's own length, then the Media's, and fall
-            # back to the node only when Plex omits both.
+            # Walked the same way `episodes_of` walks an episode. Prefer the Part's own
+            # length, then the Media's — and fall back to the node only for the *primary*
+            # version, because that is the one the node's duration describes. Lending it to
+            # version 1 would write the 115-minute cut's length onto the 79-minute one, which
+            # is the exact mistake this whole change exists to undo.
             parts: list[PlexPart] = []
             for media_index, media in enumerate(node.findall("Media")):
                 for part_index, part in enumerate(media.findall("Part")):
                     file = part.get("file")
                     if not file:
                         continue
-                    millis = part.get("duration") or media.get("duration")
+                    length = _length(part.get("duration"), media.get("duration"))
+                    if not length and media_index == 0:
+                        length = seconds or 0.0
                     parts.append(PlexPart(
                         path=file,
                         media_index=media_index,
                         part_index=part_index,
                         media_id=media.get("id") or "",
-                        seconds=(float(millis) / 1000.0
-                                 if (millis or "").isdigit() else (seconds or 0.0)),
+                        seconds=length,
                     ))
 
             paths = [part.path for part in parts]
@@ -320,18 +336,17 @@ class Plex:
             season = node.get("parentIndex")
             number = node.get("index")
             # The Video node's duration describes the *primary* version, so it is only
-            # right when there is one. Prefer the Part's own length and fall back to the
-            # Video node when Plex omits it, which it does on some items.
-            millis = node.get("duration")
-            fallback = float(millis) / 1000.0 if (millis or "").isdigit() else 0.0
+            # right when there is one — lent to any other version it is simply that other
+            # file's length reported wrongly, which is worse than admitting to none.
+            fallback = _length(node.get("duration"))
             for media_index, media in enumerate(node.findall("Media")):
                 for part_index, part in enumerate(media.findall("Part")):
                     path = part.get("file")
                     if not path:
                         continue
-                    part_ms = part.get("duration") or media.get("duration")
-                    seconds = (float(part_ms) / 1000.0
-                               if (part_ms or "").isdigit() else fallback)
+                    seconds = _length(part.get("duration"), media.get("duration"))
+                    if not seconds and media_index == 0:
+                        seconds = fallback
                     out.append(PlexEpisode(
                         show=item.title,
                         title=title,
