@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import bisect
 import os
+import time
 from bisect import bisect_right
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -234,12 +235,37 @@ class AmbianceChannel(Channel):
     def __init__(self, number: int, name: str, folder: Path | None = None):
         super().__init__(number, name)
         self.folder = Path(folder) if folder else None
+        self._clips: list[Path] = []
+        self._clips_key: tuple[str, str] | None = None
+        self._clips_at = 0.0
+
+    # Long enough that the folder is not walked on every tick, short enough that a clip
+    # dropped in today turns up without anyone restarting the box.
+    CLIPS_TTL = 30.0
 
     @property
     def clips(self) -> list[Path]:
-        """Resolved at tune time, so the month rolls over without restarting the box."""
-        from .ambiance import clips_for
-        return clips_for(self.folder)
+        """This month's loop for this hour, resolved lazily and cached.
+
+        `now()` is asked on every housekeeping tick — four times a second — and the guide asks
+        every channel on the dial what is on. Resolving from scratch each time meant walking
+        the ambiance folder at 4 Hz, which is a network round trip per tick once that folder
+        lives on the NAS: with the share busy, drawing the guide fell far enough behind to
+        look like it had crashed.
+
+        The answer only changes when the month or the part of the day changes, so that is the
+        cache key. The expiry is only there so a newly added clip appears on its own.
+        """
+        from .ambiance import clips_for, daypart_at, month_folders  # noqa: PLC0415
+        if self.folder is None:
+            return []
+        at = time.time()
+        key = (month_folders(at)[0], daypart_at(at))
+        if key != self._clips_key or at - self._clips_at >= self.CLIPS_TTL:
+            self._clips = clips_for(self.folder, at)
+            self._clips_key = key
+            self._clips_at = at
+        return self._clips
 
     def now(self, at: float) -> Airing:
         clips = self.clips

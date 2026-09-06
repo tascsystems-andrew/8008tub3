@@ -227,6 +227,22 @@ def _names_daypart(daypart: str, name: str) -> bool:
     return False
 
 
+_ANNOUNCED = ""
+
+
+def _note(message: str) -> None:
+    """Log a selection once, not every time it is recomputed.
+
+    Even cached, this is re-resolved twice a minute, and a line each time buried everything
+    else in the journal — the log is where you go when something looks wrong, so it has to
+    stay readable.
+    """
+    global _ANNOUNCED
+    if message != _ANNOUNCED:
+        _ANNOUNCED = message
+        print(message)
+
+
 def for_daypart(clips: list[Path], root: Path, when: float | None = None) -> list[Path]:
     """Narrow a month to the clips that suit this hour, or leave it alone if none do."""
     if not clips:
@@ -238,10 +254,10 @@ def for_daypart(clips: list[Path], root: Path, when: float | None = None) -> lis
     if not fitting:
         # Every clip this month is pinned to some other hour. Play them all rather than show
         # nothing: wrong time of day is a blemish, an empty channel is a fault.
-        print(f"  ambiance: nothing suits {now}, playing all {len(clips)} clip(s)")
+        _note(f"  ambiance: nothing suits {now}, playing all {len(clips)} clip(s)")
         return clips
     if len(fitting) != len(clips):
-        print(f"  ambiance: {now}, {len(fitting)} of {len(clips)} clip(s) suit the hour")
+        _note(f"  ambiance: {now}, {len(fitting)} of {len(clips)} clip(s) suit the hour")
     return fitting
 
 
