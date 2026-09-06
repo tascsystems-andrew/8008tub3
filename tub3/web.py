@@ -229,6 +229,19 @@ def _epoch(text: str) -> float:
     return datetime.strptime(str(text).replace("T", " "), "%Y-%m-%d %H:%M:%S").timestamp()
 
 
+def health_report(channels: list[dict]) -> dict:
+    """The health verdict, or a quiet "unknown" if the module cannot answer.
+
+    A banner that cannot be computed must never become a banner that cries wolf, so every
+    failure here degrades to `ok` rather than to a warning nobody can act on.
+    """
+    try:
+        from .health import health  # noqa: PLC0415
+        return health(channels)
+    except Exception:  # noqa: BLE001 - the settings page must render regardless
+        return {"level": "ok", "messages": [], "build": {}, "low_channels": []}
+
+
 def channel_status() -> list[dict]:
     if not DB.exists():
         return []
@@ -400,6 +413,11 @@ PAGE = """<!doctype html>
  .nowbar{position:absolute;top:0;bottom:0;width:2px;background:#7ee787;opacity:.85}
  .tag{font:11px ui-monospace,monospace;color:var(--dim)}
  .warn{color:#ffb454}
+ .banner{display:none;margin:0 0 14px;padding:12px 15px;border-radius:8px;line-height:1.55}
+ .banner b{display:block;margin-bottom:5px;font-size:14px}
+ .banner div{font-size:13px;opacity:.92}
+ .banner.warning{display:block;background:#3a2c12;color:#ffcf7a;border:1px solid #7a5a1e}
+ .banner.fault{display:block;background:#3d1b1b;color:#ff9c8f;border:1px solid #803030}
  .ok{color:var(--amber)}
  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
  @media(max-width:520px){.grid2{grid-template-columns:1fr}}
@@ -453,6 +471,8 @@ PAGE = """<!doctype html>
    <p class=sub id=sub>&nbsp;</p>
   </div>
  </div>
+
+ <div class=banner id=health></div>
 
  <div class=card>
   <h2>Guide</h2>
@@ -607,6 +627,13 @@ async function refresh(){
   // guide rather than shown twice. It is the one operational number the grid cannot show.
   HOURS = {}; s.channels.forEach(c=>{ HOURS[c.station] = c.schedule_hours_left; });
   drawGuide();
+
+  const h = s.health || {level:'ok', messages:[]};
+  const banner = $('#health');
+  banner.className = 'banner' + (h.level === 'ok' ? '' : ' ' + h.level);
+  banner.innerHTML = h.level === 'ok' ? '' :
+    `<b>${h.level === 'fault' ? 'Needs attention' : 'Worth a look'}</b>` +
+    h.messages.map(m => `<div>${m}</div>`).join('');
 
   $('#sub').textContent = `${s.channels.length} channel(s) · ${s.settings.cooldown_minutes} min ad cooldown`;
   $('#adload').value = s.settings.ad_load;
@@ -926,8 +953,13 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/status":
             settings = load_settings()
+            # One call, shared: `health` is a verdict *about* these channels, and computing
+            # it from a second, separately-fetched copy would let the banner disagree with
+            # the grid immediately below it.
+            channels = channel_status()
             self._json({
-                "channels": channel_status(),
+                "channels": channels,
+                "health": health_report(channels),
                 "settings": settings,
                 "inventory": ad_inventory(settings.get("commercials_dir", "")),
                 "storage": _scrub(nas({"action": "status"}, timeout=10.0)),

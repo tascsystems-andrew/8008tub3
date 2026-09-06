@@ -130,6 +130,33 @@ def render_menu_now(airing: Airing) -> str:
     )
 
 
+def render_menu_health(verdict: dict) -> str:
+    """A single line at the top of the menu when the box is quietly broken.
+
+    On the menu and nowhere else. The dial degrades so gracefully that a failing build shows
+    no symptom for a day or more, and the one place to say so is the screen someone opened on
+    purpose — not the picture, which would put a maintenance notice in front of a family
+    watching television, and not a fade-away toast nobody would be looking at.
+
+    Deliberately one line and deliberately terse. It says that something is wrong and where to
+    read the detail; the settings page has room for the rest, and this does not.
+    """
+    messages = verdict.get("messages") or []
+    if not messages:
+        return ""
+    body = messages[0]
+    if len(messages) > 1:
+        body += f"   (+{len(messages) - 1} more)"
+    # Amber for a schedule running down, red for a build that failed outright.
+    colour = "&H5A6EFF&" if verdict.get("level") == "fault" else "&H3CB4FF&"
+    body = f"! {body}   ·   boobtube.local:8008"
+    body = body.replace("{", "(").replace("}", ")").replace("\\", "/")
+    return (
+        r"{\an8\pos(960,26)\fnMonospace\fs28\b1\bord0\shad3"
+        r"\4c&H000000&\1c" + colour + "}" + body
+    )
+
+
 def render_tuning(label: str, name: str = "") -> str:
     """The half of the bug that needs no disk: the number, and the network if we know it.
 
@@ -1087,6 +1114,23 @@ class Box:
 
     # ---------- drawing ----------
 
+    def _draw_health(self) -> None:
+        """Put the health line up, or take it down. Never let it break the menu.
+
+        Cached inside `health.check`, so this costs a dictionary lookup on every redraw and a
+        database read at most once a minute.
+        """
+        try:
+            from tub3.health import check  # noqa: PLC0415 - keeps the desktop import light
+            verdict = check()
+            line = render_menu_health(verdict) if verdict.get("level") != "ok" else ""
+        except Exception:  # noqa: BLE001 - a health check must never cost you the menu
+            line = ""
+        if line:
+            self.player.show_overlay(line, overlay_id=5)
+        else:
+            self.player.hide_overlay(overlay_id=5)
+
     def _redraw(self) -> None:
         if self.mode is Mode.MENU and self.menu.visible:
             self.player.show_overlay(self.menu.render_ass(), overlay_id=1)
@@ -1104,8 +1148,10 @@ class Box:
                 self.player.show_overlay(render_menu_now(airing), overlay_id=3)
             else:
                 self.player.hide_overlay(overlay_id=3)
+            self._draw_health()
             return
         self.player.hide_overlay(overlay_id=1)
+        self.player.hide_overlay(overlay_id=5)
         if self._tuning:
             # A change is in flight — either settling, or waiting on a second digit. This is
             # the only thing on screen that is guaranteed to be true right now, so it wins
