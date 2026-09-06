@@ -50,7 +50,7 @@ SEAM = GOLD                 # where the listing loops — the channel numbers' o
 SHOW_SIZE = 32
 EPISODE_SIZE = 24
 CHAR_W = 0.6                # monospace advance as a fraction of the point size
-NAME_SIZE = 24              # the station name in the left column
+NAME_SIZE = 30              # the station name in the left column
 
 AUDIO_SUFFIXES = {".mp3", ".m4a", ".flac", ".ogg", ".opus", ".wav", ".aac", ".wma"}
 
@@ -60,7 +60,7 @@ ROW_H = 96
 # there is a clear band for rows to scroll up behind. The header is drawn last and is opaque,
 # which is what hides them as they leave.
 HEADER_H = 300
-LEFT_W = 300              # the channel column
+LEFT_W = 400              # the channel column
 COL_W = 490               # each half-hour
 COLUMNS = 3               # 90 minutes
 SCROLL_PX_PER_SEC = 22.0  # slow on purpose
