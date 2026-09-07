@@ -520,6 +520,16 @@ class CecDriver(Driver):
     NEW_PHYS = re.compile(r"new-phys-addr:\s*([0-9]\.[0-9]\.[0-9]\.[0-9])")
     PHYS = re.compile(r"(?<!-)phys-addr:\s*([0-9]\.[0-9]\.[0-9]\.[0-9])")
 
+    # Whose message this is. `cec-ctl --monitor` prints what this box sends as well as
+    # what it receives, and both carry the same operand lines — so without this the
+    # driver reads the box's own output back as button presses. Switching the
+    # television's input sends `ui-cmd=select` to the set, which came straight back in
+    # as Verb.SELECT and opened the on-screen menu, which then swallowed every
+    # following press. The symptom was "SOURCE opens the menu and then I cannot get
+    # back", and the cause was the box talking to itself.
+    MINE = "Transmitted by "
+    THEIRS = "Received from "
+
     UI_HEX = re.compile(r"ui-cmd:.*\(0x([0-9a-fA-F]{1,2})\)")
     UI_DEC = re.compile(r"ui-cmd:\s*(\d{1,3})\s*$")
     RELEASED = re.compile(r"USER_CONTROL_RELEASED")
@@ -594,7 +604,18 @@ class CecDriver(Driver):
         # None: not in an announcement. "new": inside a ROUTING_CHANGE, waiting for the
         # *new* address. "any": inside a SET_STREAM_PATH or ACTIVE_SOURCE.
         awaiting: str | None = None
+        mine = False
         for line in self._proc.stdout:
+            # Header lines start at column zero and say which direction the message
+            # went; the operands that follow are indented and say nothing about it.
+            if line.startswith(self.MINE):
+                mine = True
+                awaiting = None
+                continue
+            if line.startswith(self.THEIRS):
+                mine = False        # and fall through: this line names the message
+            if mine:
+                continue
             if awaiting:
                 pattern = self.NEW_PHYS if awaiting == "new" else self.PHYS
                 match = pattern.search(line)
