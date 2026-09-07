@@ -267,6 +267,11 @@ class Box:
         self.menu = Menu(build_root(state or {}))
         self.bug = BugState()
         self.channel = start_channel or (lineup.numbers[0] if lineup.numbers else 0)
+        # Where the dial was before this channel, for PREV.CH. Deliberately recorded in
+        # select() and not in tune(): tune() is also how the schedule moves to the next
+        # programme on the channel you are already watching, and counting that as a
+        # channel change would make PREV.CH mean "the channel I am on".
+        self._previous_channel: int | None = None
         self.running = False
         self._lock = threading.Lock()
         self._pending_digits = ""
@@ -412,6 +417,8 @@ class Box:
             # Pressing a channel button is the plainest statement there is that the
             # viewer wants television back, so it wins over the phone.
             self.cast_video = None
+        if channel != self.channel:
+            self._previous_channel = self.channel
         self.channel = channel
         self._settle_at = time.monotonic() + self.SETTLE
         self._tune_seq += 1
@@ -612,6 +619,30 @@ class Box:
 
     def surf(self, delta: int) -> None:
         self.select(self.lineup.surf(self.channel, delta))
+
+    def jump_back(self) -> None:
+        """PREV.CH. The button every television has had since remotes had wires.
+
+        Pressed twice it returns you to where you started, because `select` records
+        the outgoing channel on the way past — so the pair of channels swaps rather
+        than the history growing. That is what the button does on a real set, and a
+        deeper history would be a different, worse button.
+        """
+        if self._previous_channel is None or self._previous_channel == self.channel:
+            return
+        self.select(self._previous_channel)
+
+    def jump_to_guide(self) -> None:
+        """Straight to the listings, wherever they sit on the dial.
+
+        Asks the lineup rather than assuming channel 2: the number lives in one place
+        and this is not it.
+        """
+        for station in self.lineup.channels:
+            if getattr(station, "is_guide", False):
+                if station.number != self.channel:
+                    self.select(station.number)
+                return
 
     # ---------- volume ----------
 
@@ -1292,6 +1323,16 @@ class Box:
                 if self.bug.airing:
                     self.bug.shown_at = time.monotonic()
                 self._redraw()
+            elif event.verb is Verb.INFO:
+                # The same affordance, on the button that actually says so. BACK keeps
+                # doing it because a clicker has no INFO key and would otherwise lose it.
+                if self.bug.airing:
+                    self.bug.shown_at = time.monotonic()
+                self._redraw()
+            elif event.verb is Verb.LAST:
+                self.jump_back()
+            elif event.verb is Verb.GUIDE:
+                self.jump_to_guide()
 
     # ---------- run ----------
 

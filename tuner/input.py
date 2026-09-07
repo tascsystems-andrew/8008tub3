@@ -62,6 +62,12 @@ class Verb(Enum):
     VOLUME_UP = "volume_up"
     VOLUME_DOWN = "volume_down"
     MUTE = "mute"
+    # A full remote has buttons a presentation clicker does not. All three are
+    # optional in exactly the way DIGIT is: nothing requires them, and a four-button
+    # clicker simply never produces one.
+    LAST = "last"      # PREV.CH - back to the channel before this one
+    GUIDE = "guide"    # the listings, however far down the dial they are
+    INFO = "info"      # what am I watching
 
 
 @dataclass(frozen=True)
@@ -103,6 +109,14 @@ EVDEV_MAP: dict[int, Verb] = {
     114: Verb.VOLUME_DOWN,
     113: Verb.MUTE,
     116: Verb.POWER,
+    # Function keys, because a Flirc cannot send the ones a television would. Its
+    # vocabulary has no KEY_POWER at all, and its `suspend` suspends the Raspberry Pi
+    # rather than the set - so POWER arrives as F12 and is translated here. F5 is
+    # deliberately unused: it already means SELECT, being a clicker's long-press up.
+    88:  Verb.POWER,   # F12
+    59:  Verb.LAST,    # F1
+    60:  Verb.GUIDE,   # F2
+    61:  Verb.INFO,    # F3
 }
 
 EVDEV_DIGITS = {2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 7: 6, 8: 7, 9: 8, 10: 9, 11: 0}
