@@ -67,6 +67,7 @@ class Verb(Enum):
     # clicker simply never produces one.
     LAST = "last"      # PREV.CH - back to the channel before this one
     GUIDE = "guide"    # the listings, however far down the dial they are
+    SOURCE = "source"  # hand the television to another input, and take it back
     INFO = "info"      # what am I watching
 
 
@@ -115,7 +116,10 @@ EVDEV_MAP: dict[int, Verb] = {
     # deliberately unused: it already means SELECT, being a clicker's long-press up.
     88:  Verb.POWER,   # F12
     59:  Verb.LAST,    # F1
-    60:  Verb.GUIDE,   # F2
+    # SOURCE, not GUIDE, on the button that says SOURCE. A remote with a numeric keypad
+    # does not need a guide button — the guide is a channel, so you press its number.
+    60:  Verb.SOURCE,  # F2
+    62:  Verb.GUIDE,   # F4, for a remote without digits
     61:  Verb.INFO,    # F3
 }
 

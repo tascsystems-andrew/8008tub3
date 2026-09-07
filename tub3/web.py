@@ -610,6 +610,10 @@ PAGE = """<!doctype html>
    <br><br>Two buttons can share a keystroke. Teach both &#9650; and CH&nbsp;+ and either
    will work; the tick appears on both, because the dongle stores one entry per infrared
    code and the television only ever sees the keystroke.
+   <br><br><b>SOURCE</b> hands the television to your other input over HDMI-CEC and takes
+   it back on a second press &mdash; which way round is read from the set itself, so it
+   still works if you switched inputs with the TV's own remote. There is no GUIDE button
+   because the guide is a channel: press <b>2</b>.
    <br><br>&#9668; and &#9658; currently do the same as channel up and down &mdash; that is
    what a presentation clicker sends for previous and next, and the television has read them
    that way since before it had a remote with a d-pad.

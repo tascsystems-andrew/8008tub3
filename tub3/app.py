@@ -521,6 +521,16 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:  # noqa: BLE001
             print(f"  cec: taking the input raised {exc}")
 
+    def hand_over(phys: str) -> None:
+        """Tell the television to show a different input."""
+        from . import cec  # noqa: PLC0415 - keeps CEC off the desktop import path
+
+        try:
+            if not cec.hand_input_to(phys):
+                print("  cec: could not hand the input over")
+        except Exception as exc:  # noqa: BLE001
+            print(f"  cec: handing the input over raised {exc}")
+
     def our_address() -> str | None:
         from . import cec  # noqa: PLC0415
 
@@ -582,7 +592,11 @@ def main(argv: list[str] | None = None) -> int:
 
     box = Box(lineup, player, start_channel=start, state=state,
               rescan=rescan, power=power, volume=volume, tv_state=tv_state,
-              take_input=take_input, our_address=our_address())
+              take_input=take_input, our_address=our_address(),
+              hand_over=hand_over,
+              # Where SOURCE sends the television. HDMI 1 by default because that is
+              # where the other box usually lives; settable for anyone whose is not.
+              handover_address=load_settings().get("handover_address") or "1.0.0.0")
 
     # AirPlay, if the receiver is running. Deliberately not required and never fatal: the
     # unit is separate, it may be stopped or absent, and a television whose channels work is

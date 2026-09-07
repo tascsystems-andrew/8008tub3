@@ -1,5 +1,7 @@
 {
-  "programs_dirs": ["/mnt/tub3/Media/mshare/TV"],
+  "programs_dirs": [
+    "/mnt/tub3/Media/mshare/TV"
+  ],
   "commercials_dir": "/mnt/tub3/Media/mshare/Commercials",
   "guide_music_dir": "",
   "ambiance_dir": "",
@@ -7,5 +9,6 @@
   "cooldown_minutes": 45,
   "ad_load": 3,
   "fullscreen": true,
-  "subtitles": false
+  "subtitles": false,
+  "handover_address": "1.0.0.0"
 }

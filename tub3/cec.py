@@ -32,6 +32,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 CEC_DEVICE = "/dev/cec0"
+# A physical address is four dot-separated nibbles. Checked before it reaches a
+# command line, like every other externally-supplied value in this project.
+_PHYS_RE = __import__("re").compile(r"^[0-9A-Fa-f]\.[0-9A-Fa-f]\.[0-9A-Fa-f]\.[0-9A-Fa-f]$")
 CMDLINE = Path("/boot/firmware/cmdline.txt")
 CMDLINE_LEGACY = Path("/boot/cmdline.txt")
 
@@ -245,6 +248,22 @@ def take_input() -> bool:
     """
     from .cectest import send
     return send("active-source").ok
+
+
+def hand_input_to(phys: str) -> bool:
+    """Ask the television to show a different input.
+
+    `Set Stream Path` is the mirror of `take_input`: that one says "show us", this one
+    says "show whatever is at this address". It is a broadcast and the *television*
+    acts on it, which is what makes it work for a device that is not on the bus at all
+    — an Apple TV asleep on HDMI 1 cannot announce itself, but the set can still be
+    told to switch to it.
+    """
+    if not _PHYS_RE.match(phys or ""):
+        return False
+    code, _ = _run(["cec-ctl", "-d", CEC_DEVICE,
+                    "--set-stream-path", f"phys-addr={phys}"])
+    return code == 0
 
 
 def our_address() -> str | None:

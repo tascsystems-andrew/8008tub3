@@ -45,7 +45,8 @@ ALLOWED = frozenset({
     # suspend the Raspberry Pi rather than the television.
     "F12",                                              # POWER
     "F1",                                               # LAST  (PREV.CH)
-    "F2",                                               # GUIDE
+    "F2",                                               # SOURCE
+    "F4",                                               # GUIDE
     "F3",                                               # INFO
 })
 

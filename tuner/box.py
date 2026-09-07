@@ -203,6 +203,8 @@ class Box:
         volume: Callable[[str], None] | None = None,
         tv_state: Callable[[], str] | None = None,
         take_input: Callable[[], None] | None = None,
+        hand_over: Callable[[str], None] | None = None,
+        handover_address: str | None = None,
         our_address: str | None = None,
     ):
         self.lineup = lineup
@@ -217,6 +219,12 @@ class Box:
         # Announcing ourselves as the active source, without touching the set's power — the
         # message that switches inputs and nothing else.
         self._take_input = take_input
+        # The mirror of it: telling the set to show something else. Together they make
+        # one button that swaps the television between this box and whatever else is
+        # plugged in, which is what SOURCE means on the remote it is printed on.
+        self._hand_over = hand_over
+        self._handover_address = handover_address
+        self._handover_pending = False
         # Our physical address, as the television numbers its ports. Compared against
         # whatever the bus last announced, to answer "are we what is showing?".
         self._our_address = our_address
@@ -1101,6 +1109,29 @@ class Box:
         except Exception:  # noqa: BLE001 - a television that will not answer is not fatal
             pass
 
+    def _handover_now(self) -> None:
+        """Swap the television between us and the other input.
+
+        Which way round is read from the bus rather than remembered. The set announces
+        every input change itself, so `_screen_is_ours` is true even when the switch
+        was made with the television's own remote — a flag kept here would drift the
+        first time anyone did that, and the button would then need pressing twice.
+        """
+        if self._screen_is_ours():
+            target = self._handover_address
+            if not target or self._hand_over is None:
+                print("  source: nowhere to hand the television to "
+                      "(set handover_address in settings)")
+                return
+            print(f"  source: handing the television to {target}")
+            try:
+                self._hand_over(target)
+            except Exception:  # noqa: BLE001 - a set that will not switch is not fatal
+                pass
+        else:
+            print("  source: taking the television back")
+            self._take_input_now()
+
     def _wake_now(self) -> None:
         """Wake the television without touching the box's own power state.
 
@@ -1354,6 +1385,11 @@ class Box:
                 self.jump_back()
             elif event.verb is Verb.GUIDE:
                 self.jump_to_guide()
+            elif event.verb is Verb.SOURCE:
+                # Deferred, like every other CEC round trip: it shells out and waits
+                # on a television, which is the better part of a second, and this is
+                # the input thread.
+                self._handover_pending = True
 
     # ---------- run ----------
 
@@ -1389,10 +1425,14 @@ class Box:
                 due: int | None = None
                 power = False
                 wake = False
+                handover = False
                 with self._lock:
                     if self._wake_pending:
                         self._wake_pending = False
                         wake = True
+                    if self._handover_pending:
+                        self._handover_pending = False
+                        handover = True
                     if self._power_pending:
                         self._power_pending = False
                         power = True
@@ -1405,6 +1445,8 @@ class Box:
                 # Outside the lock, both of them. One shells out to `cec-ctl` and waits on a
                 # television; the other opens a file. Holding the lock across either would
                 # make every press arriving meanwhile wait for it, which is the drag.
+                if handover:
+                    self._handover_now()
                 if wake:
                     # Not `continue` — the code does not change what is playing, so the
                     # settle and housekeeping below still have work to do on this tick.
