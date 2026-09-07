@@ -122,6 +122,35 @@ def nas(request: dict, timeout: float = 60.0) -> dict:
         return {"ok": False, "error": "The storage helper returned something unreadable."}
 
 
+FLIRC_HELPER = "/usr/local/sbin/tub3-flirc"
+
+
+def flirc(request: dict, timeout: float = 30.0) -> dict:
+    """Ask the root helper to do one thing to the infrared dongle.
+
+    Same boundary as `nas`, for the same reason: writing to the dongle's HID interface is
+    root's job and this server is an unauthenticated HTTP listener. The helper validates the
+    keystroke against its own allowlist rather than trusting the one in the page, because a
+    trust boundary that trusts its caller's list is not one.
+    """
+    import subprocess
+
+    if not Path(FLIRC_HELPER).exists():
+        return {"ok": False,
+                "error": "The remote helper is not installed — re-run pi_setup.sh."}
+    try:
+        result = subprocess.run(
+            ["sudo", "-n", FLIRC_HELPER],
+            input=json.dumps(request), capture_output=True, text=True, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "The dongle took too long to answer."}
+    try:
+        return json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return {"ok": False, "error": "The remote helper returned something unreadable."}
+
+
 BROWSE_ROOT = Path("/mnt/tub3")
 BROWSE_LIMIT = 300
 # Each folder inspected is a round trip to the NAS. Over a site-to-site VPN at ~38 ms that
@@ -447,6 +476,21 @@ PAGE = """<!doctype html>
  .chip:last-child{border:0}
  .x{cursor:pointer;color:var(--dim);padding:0 4px}
  .x:hover{color:#ff6b6b}
+ /* The remote, laid out the way it sits in your hand. A list of key names would fit the
+    page better and be useless with a remote in the other hand: you look at the thing, not
+    at a table. */
+ .rgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-width:280px;margin:14px 0}
+ .rgrid .wide{grid-column:span 3}
+ .rgrid .two{grid-column:span 2}
+ button.rk{background:var(--card);color:var(--fg);border:1px solid var(--line);
+   border-radius:8px;padding:12px 4px;font:12px/1.1 ui-monospace,monospace;cursor:pointer;
+   box-shadow:none;min-height:42px}
+ button.rk:hover{border-color:var(--amber)}
+ button.rk.taught{border-color:#3f8f4f;color:#8fd89c}
+ button.rk.taught::after{content:" ✓";color:#8fd89c}
+ button.rk.busy{border-color:var(--amber);color:var(--amber);animation:pulse 1s infinite}
+ @keyframes pulse{50%{opacity:.45}}
+ .rpower{background:#7a2320 !important;color:#fff !important}
 </style>
 <div class=wrap>
  <div class=brand>
@@ -508,6 +552,22 @@ PAGE = """<!doctype html>
    <button id=nasmount>Connect</button>
   </div>
   <div class=hint id=nasmsg></div>
+ </div>
+
+ <div class=card>
+  <h2>Remote</h2>
+  <div class=hint id=remotestate>Checking for the dongle&hellip;</div>
+  <div class=rgrid id=rgrid></div>
+  <div class=hint>Click a button here, then point your remote at the dongle and press the
+   matching button on it. The dongle learns the infrared code and sends a keystroke from
+   then on, so the television needs no infrared support of its own.
+   <br><br>Two buttons can share a keystroke &mdash; the arrows above and below OK are
+   taught the same code as CH&nbsp;+ and CH&nbsp;&minus;, so either works and the tick
+   appears on both.
+   <br><br>Nothing here can be pressed twice by accident: a code the dongle already knows is
+   refused rather than silently moved.</div>
+  <div style="margin-top:14px"><button class=ghost id=remoteclear>Forget every button</button></div>
+  <div class=hint id=remotemsg></div>
  </div>
 
  <div class=card>
@@ -821,6 +881,73 @@ $('#rebuild').onclick=async()=>{
   $('#saved').textContent=r.message; refresh();
 };
 refresh(); setInterval(refresh,15000);
+
+/* The NH314UD, in the order the buttons sit on it. `key` is the keystroke the dongle will
+   send; tuner/input.py turns that back into a verb. Buttons with the same key are the same
+   keystroke deliberately — the d-pad and the channel rocker do the same job. */
+const RKEYS=[
+ {l:'POWER',k:'F12',c:'rpower'},{l:'SOURCE',k:'F2'},{l:'INFO',k:'F3'},
+ {l:'1',k:'1'},{l:'2',k:'2'},{l:'3',k:'3'},
+ {l:'4',k:'4'},{l:'5',k:'5'},{l:'6',k:'6'},
+ {l:'7',k:'7'},{l:'8',k:'8'},{l:'9',k:'9'},
+ {l:'PREV.CH',k:'F1'},{l:'0',k:'0'},{l:'MUTE',k:'mute'},
+ {l:'VOL +',k:'vol_up'},{l:'▲ / CH +',k:'up'},{l:'CH +',k:'up'},
+ {l:'VOL −',k:'vol_down'},{l:'▼ / CH −',k:'down'},{l:'CH −',k:'down'},
+ {l:'BACK',k:'escape'},{l:'MENU',k:'tab'},{l:'OK',k:'enter'},
+];
+let rtaught=new Set(), rbusy=false;
+
+function rdraw(){
+  const g=$('#rgrid'); g.innerHTML='';
+  RKEYS.forEach((b,i)=>{
+    const el=document.createElement('button');
+    el.className='rk'+(b.c?' '+b.c:'')+(rtaught.has(b.k)?' taught':'');
+    el.textContent=b.l; el.dataset.key=b.k; el.dataset.idx=i;
+    el.onclick=()=>rrecord(b,el);
+    g.appendChild(el);
+  });
+}
+
+async function rcall(body){
+  const r=await fetch('/api/remote',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  return await r.json();
+}
+
+async function rrefresh(){
+  const r=await rcall({action:'list'});
+  if(!r.ok){ $('#remotestate').textContent=r.error||'No dongle found.'; rdraw(); return; }
+  rtaught=new Set((r.keys||[]).map(k=>k.key));
+  const n=(r.keys||[]).length;
+  $('#remotestate').textContent = n
+    ? n+' button'+(n===1?'':'s')+' taught.'
+    : 'Dongle found, nothing taught yet. Click a button below to start.';
+  rdraw();
+}
+
+async function rrecord(b,el){
+  if(rbusy) return;
+  rbusy=true; el.classList.add('busy');
+  const was=el.textContent;
+  let left=20;
+  /* A countdown, not a spinner: the helper is genuinely waiting for a person to press a
+     button, and a spinner would say "working" when it means "your turn". */
+  el.textContent='press '+b.l+'…';
+  const tick=setInterval(()=>{ left--; if(left>0) el.textContent='press '+b.l+'… '+left; },1000);
+  const r=await rcall({action:'record',key:b.k});
+  clearInterval(tick);
+  el.classList.remove('busy'); el.textContent=was; rbusy=false;
+  $('#remotemsg').textContent = r.ok ? '' : (r.error||'That did not take.');
+  await rrefresh();
+}
+
+$('#remoteclear').onclick=async()=>{
+  if(!confirm('Forget every button the dongle has learned?')) return;
+  const r=await rcall({action:'clear'});
+  $('#remotemsg').textContent = r.ok ? 'Dongle cleared.' : (r.error||'Could not clear it.');
+  await rrefresh();
+};
+rrefresh();
 </script>
 """
 
@@ -1082,8 +1209,13 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/tv":
-            from .tvpage import PAGE  # noqa: PLC0415
-            body = PAGE.encode()
+            # Aliased, and it matters. A function-local import binds the name for the
+            # WHOLE function, so importing it as `PAGE` made the module-level PAGE a
+            # local everywhere in do_GET — including the settings page at the top,
+            # which then raised UnboundLocalError on every request. The settings page
+            # had been returning 500 since this route was added.
+            from .tvpage import PAGE as TV_PAGE  # noqa: PLC0415
+            body = TV_PAGE.encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -1164,6 +1296,14 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/settings":
             self._json({"settings": save_settings(payload)})
+            return
+
+        if path == "/api/remote":
+            # One route, four verbs, forwarded verbatim. The helper is the authority on what
+            # may be recorded; repeating its allowlist here would be a second place to get it
+            # wrong. `record` blocks while it waits for someone to press a button, which is
+            # why the browser shows a countdown rather than a spinner.
+            self._json(flirc(payload, timeout=35.0))
             return
 
         if path == "/api/plex":
