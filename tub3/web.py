@@ -928,6 +928,71 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):  # noqa: A003 - quiet by default
         pass
 
+    _AUDIO_TYPES = {".m4a": "audio/mp4", ".mp3": "audio/mpeg", ".aac": "audio/aac",
+                    ".flac": "audio/flac", ".wav": "audio/wav", ".ogg": "audio/ogg",
+                    ".opus": "audio/opus"}
+
+    def _send_file(self, target: Path) -> None:
+        """Serve a file, honouring Range.
+
+        AVFoundation opens a stream by asking for the last few bytes to find the index, then
+        seeks back to the front. Without Range every one of those requests is answered with
+        the entire file, so a 180 MB track takes minutes to make a sound and the player gives
+        up long before. http.server does not implement this, so it is implemented here.
+        """
+        try:
+            size = target.stat().st_size
+        except OSError:
+            self.send_error(404)
+            return
+
+        start, end = 0, size - 1
+        partial = False
+        raw = self.headers.get("Range", "")
+        if raw.startswith("bytes="):
+            first, _, last = raw[len("bytes="):].partition("-")
+            try:
+                if first:
+                    start = int(first)
+                    if last:
+                        end = min(int(last), size - 1)
+                else:
+                    # A suffix range: the final N bytes, which is how the index is found.
+                    start = max(0, size - int(last))
+            except ValueError:
+                start, end = 0, size - 1
+            else:
+                partial = True
+            if start > end or start >= size:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.end_headers()
+                return
+
+        length = end - start + 1
+        self.send_response(206 if partial else 200)
+        self.send_header("Content-Type",
+                         self._AUDIO_TYPES.get(target.suffix.lower(), "application/octet-stream"))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(length))
+        if partial:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.end_headers()
+        if self.command == "HEAD":
+            return
+        try:
+            with target.open("rb") as fh:
+                fh.seek(start)
+                remaining = length
+                while remaining > 0:
+                    chunk = fh.read(min(65536, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # a player that changed channel is not a server fault
+
     def _json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload).encode()
         self.send_response(status)
@@ -1031,6 +1096,31 @@ class Handler(BaseHTTPRequestHandler):
             # the server answers LAN clients without it.
             from .plex import load_config  # noqa: PLC0415
             self._json({"url": (load_config() or {}).get("url", "")})
+            return
+
+        if path == "/api/tv/guide/music":
+            # The playlist the guide is playing, so a client that draws its own listings can
+            # play the same music over them. Reuses the box's own chooser rather than reading
+            # the folder here, so the festive switch happens on both screens on the same day.
+            from tuner.guide import music_for  # noqa: PLC0415
+            music_dir = load_settings().get("guide_music_dir")
+            tracks = music_for(Path(music_dir) if music_dir else None)
+            self._json({"tracks": [
+                {"index": i, "name": t.name, "url": f"/api/tv/guide/music/{i}"}
+                for i, t in enumerate(tracks)
+            ]})
+            return
+
+        if path.startswith("/api/tv/guide/music/"):
+            from tuner.guide import music_for  # noqa: PLC0415
+            music_dir = load_settings().get("guide_music_dir")
+            tracks = music_for(Path(music_dir) if music_dir else None)
+            try:
+                track = tracks[int(path.rsplit("/", 1)[1])]
+            except (ValueError, IndexError):
+                self.send_error(404)
+                return
+            self._send_file(track)
             return
 
         if path == "/api/tv/channels":
