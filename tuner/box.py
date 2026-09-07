@@ -617,6 +617,31 @@ class Box:
         self._guide_pushed_at = now
         self.player.show_overlay(ass, overlay_id=4)
 
+    def show_bug_again(self) -> None:
+        """What am I watching. The channel number, and the programme under it.
+
+        Looks the airing up rather than re-showing `self.bug`, and it has to: the run
+        loop sets `bug.airing = None` once the bug fades, so four seconds after a
+        channel change there is nothing left to re-show. Guarding on `bug.airing`, as
+        this did, therefore meant the button worked only while the bug was already on
+        screen — which is precisely when nobody presses it.
+
+        Looking it up is also the more honest answer. The schedule steps on while you
+        sit there, so the programme that was on when you tuned in is not necessarily
+        the one playing now, and the menu already looks it up for that reason.
+        """
+        if self._guide is not None:
+            return          # the listings are the picture here; a bug would be
+                            # furniture on top of furniture
+        try:
+            airing = self.lineup.now(self.channel, time.time())
+        except Exception:  # noqa: BLE001 - never let a schedule query blank the screen
+            airing = self.bug.airing
+        if airing is None:
+            return
+        self.bug = BugState(airing=airing, shown_at=time.monotonic())
+        self._redraw()
+
     def surf(self, delta: int) -> None:
         self.select(self.lineup.surf(self.channel, delta))
 
@@ -1318,17 +1343,13 @@ class Box:
                 self.menu.open()
                 self._redraw()
             elif event.verb is Verb.BACK:
-                # Re-show the bug. On a four-button remote this is the "what am I watching"
-                # affordance, and it costs nothing.
-                if self.bug.airing:
-                    self.bug.shown_at = time.monotonic()
-                self._redraw()
+                # On a four-button remote this is the "what am I watching" affordance,
+                # and it costs nothing.
+                self.show_bug_again()
             elif event.verb is Verb.INFO:
-                # The same affordance, on the button that actually says so. BACK keeps
-                # doing it because a clicker has no INFO key and would otherwise lose it.
-                if self.bug.airing:
-                    self.bug.shown_at = time.monotonic()
-                self._redraw()
+                # The same thing, on the button that actually says so. BACK keeps doing
+                # it because a clicker has no INFO key and would otherwise lose it.
+                self.show_bug_again()
             elif event.verb is Verb.LAST:
                 self.jump_back()
             elif event.verb is Verb.GUIDE:
