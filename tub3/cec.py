@@ -247,33 +247,31 @@ def take_input() -> bool:
     return send("active-source").ok
 
 
-def select_input(port: int) -> bool:
-    """Switch the television to an HDMI port, by driving its own input menu.
+def step_input() -> bool:
+    """Move the television on to its next input, one place per call.
 
-    Not `Set Stream Path`, which is the message the specification provides for exactly this
-    and which this television ignores completely. Captured on the bus: the broadcast goes
-    out and nothing answers — no routing change, no active source, from the set or from the
-    device being asked for. The spec puts that message in the television's hands, and sets
-    generally obey only `Active Source`, from the device that wants the screen itself. A box
-    cannot reliably nominate a third party that way, and `Active Source` did not bring this
-    one back either.
+    This is the television's own INPUT button, and it behaves like it: a press opens the
+    input menu and advances the highlight one place, and `select` confirms. Pressing it
+    repeatedly walks the inputs, which is exactly what that button does on the remote it is
+    imitating.
 
-    What the set does obey is its own remote. `input-select` opens the input menu and moves
-    the highlight one place; `select` confirms. The menu opens on HDMI 1, so the number of
-    presses is simply the port number — which is why this takes a port and not an address.
+    One step per call, deliberately, because more is not possible. Repeated `input-select`
+    messages inside one menu session are collapsed into a single press by this set — verified
+    both as one cec-ctl invocation and as separate invocations 0.46s apart, neither of which
+    moved the highlight twice. Nor is there a way to name an input directly: the specification
+    provides `Set Stream Path` and `Select AV Input Function` for exactly that, and this set
+    ignores both. Watched on the bus, the working sequence draws a ROUTING_CHANGE out of the
+    television and every other candidate draws nothing at all.
 
-    Every message goes in ONE `cec-ctl` invocation, and that is the whole trick. Sent as
-    separate calls the sequence took about three seconds — half a second of process startup
-    each — and the menu timed out and closed before the confirmation arrived, so the
-    highlight moved and then sprang back.
+    All messages go in ONE cec-ctl invocation. Sent separately the sequence took about three
+    seconds — half a second of process startup each — and the menu timed out and closed
+    before the confirmation arrived, so the highlight moved and then sprang back.
     """
-    if not 1 <= port <= 8:
-        return False
-    args = ["cec-ctl", "-d", CEC_DEVICE, "--to", TV_ADDRESS]
-    for _ in range(port):
-        args += ["--user-control-pressed", "ui-cmd=input-select", "--user-control-released"]
-    args += ["--user-control-pressed", "ui-cmd=select", "--user-control-released"]
-    code, _ = _run(args, timeout=12.0)
+    code, _ = _run(["cec-ctl", "-d", CEC_DEVICE, "--to", TV_ADDRESS,
+                    "--user-control-pressed", "ui-cmd=input-select",
+                    "--user-control-released",
+                    "--user-control-pressed", "ui-cmd=select",
+                    "--user-control-released"], timeout=10.0)
     return code == 0
 
 

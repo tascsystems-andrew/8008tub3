@@ -203,8 +203,7 @@ class Box:
         volume: Callable[[str], None] | None = None,
         tv_state: Callable[[], str] | None = None,
         take_input: Callable[[], None] | None = None,
-        select_input: Callable[[int], None] | None = None,
-        other_port: int | None = None,
+        step_input: Callable[[], None] | None = None,
         our_address: str | None = None,
     ):
         self.lineup = lineup
@@ -222,10 +221,7 @@ class Box:
         # The mirror of it: telling the set to show something else. Together they make
         # one button that swaps the television between this box and whatever else is
         # plugged in, which is what SOURCE means on the remote it is printed on.
-        self._select_input = select_input
-        # Which socket everything else is plugged into. Ours is read from EDID;
-        # this one has to be told, because nothing on the bus reliably says.
-        self._other_port = other_port
+        self._step_input = step_input
         self._handover_pending = False
         # Our physical address, as the television numbers its ports. Compared against
         # whatever the bus last announced, to answer "are we what is showing?".
@@ -1112,30 +1108,21 @@ class Box:
             pass
 
     def _handover_now(self) -> None:
-        """Swap the television between us and whatever else is plugged in.
+        """Move the television on to its next input.
 
-        Which way round is read from the bus rather than remembered. The set announces
-        every input change itself, so this stays right even when the switch was made
-        with the television's own remote — a flag kept here would drift the first time
-        anyone did that, and the button would then need pressing twice.
+        A cycle, not a jump, because a cycle is all this is: the set is being driven by its
+        own INPUT button, one place per press. Press it again to keep going round, and again
+        to come back — which is what that button does on any television.
 
-        Stepping forward is a cycle, not a jump: the set is being driven by its own
-        INPUT button and that is what that button does. Coming back is exact.
+        There is no "take it back" branch any more. Announcing ourselves as the active source
+        is the message that should do it and this set ignores it, so coming home is another
+        step round the same loop.
         """
-        if self._select_input is None:
+        if self._step_input is None:
             return
-        from tub3.cec import port_of  # noqa: PLC0415 - tuner does not import tub3 at load
-
-        ours = port_of(self._our_address)
-        going_out = self._screen_is_ours()
-        port = self._other_port if going_out else ours
-        if port is None:
-            print("  source: no idea which socket to ask for")
-            return
-        print(f"  source: {'handing the television over' if going_out else 'taking it back'}"
-              f" — HDMI {port}")
+        print("  source: stepping the television to its next input")
         try:
-            self._select_input(port)
+            self._step_input()
         except Exception:  # noqa: BLE001 - a set that will not switch is not fatal
             pass
 

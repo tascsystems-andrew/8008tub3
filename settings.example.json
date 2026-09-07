@@ -9,6 +9,5 @@
   "cooldown_minutes": 45,
   "ad_load": 3,
   "fullscreen": true,
-  "subtitles": false,
-  "other_input_port": 1
+  "subtitles": false
 }

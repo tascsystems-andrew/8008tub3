@@ -521,15 +521,15 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:  # noqa: BLE001
             print(f"  cec: taking the input raised {exc}")
 
-    def select_input(port: int) -> None:
-        """Switch the television to an HDMI port."""
+    def step_input() -> None:
+        """Move the television on to its next input."""
         from . import cec  # noqa: PLC0415 - keeps CEC off the desktop import path
 
         try:
-            if not cec.select_input(port):
-                print(f"  cec: could not switch to HDMI {port}")
+            if not cec.step_input():
+                print("  cec: could not step the input")
         except Exception as exc:  # noqa: BLE001
-            print(f"  cec: switching input raised {exc}")
+            print(f"  cec: stepping the input raised {exc}")
 
     def our_address() -> str | None:
         from . import cec  # noqa: PLC0415
@@ -593,10 +593,7 @@ def main(argv: list[str] | None = None) -> int:
     box = Box(lineup, player, start_channel=start, state=state,
               rescan=rescan, power=power, volume=volume, tv_state=tv_state,
               take_input=take_input, our_address=our_address(),
-              select_input=select_input,
-              # Which socket SOURCE hands the television to. HDMI 1 by default,
-              # because that is where the other box usually lives.
-              other_port=int(load_settings().get("other_input_port") or 1))
+              step_input=step_input)
 
     # AirPlay, if the receiver is running. Deliberately not required and never fatal: the
     # unit is separate, it may be stopped or absent, and a television whose channels work is
