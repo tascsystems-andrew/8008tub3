@@ -528,6 +528,20 @@ class CecDriver(Driver):
     # following press. The symptom was "SOURCE opens the menu and then I cannot get
     # back", and the cause was the box talking to itself.
     MINE = "Transmitted by "
+    # How long to stop listening after this box presses a key at the television.
+    #
+    # The set has RC passthrough on, which means it forwards remote keys to whatever
+    # is the active source — and that is us. So a key we send to the television comes
+    # straight back at us as a genuine received press. Switching the input sends
+    # `select`, which returned as Verb.SELECT and opened the on-screen menu; the menu
+    # then swallowed the next press, so the input moved once and then seemed stuck.
+    #
+    # Deafness rather than filtering by content: the returning message is
+    # indistinguishable from a real one — same sender, same code, no marker — so the
+    # only thing that separates them is that ours arrives immediately after we spoke.
+    # A real press from the television's own remote inside that window is lost, which
+    # is a fair price for a button that works.
+    ECHO_WINDOW = 2.0
     THEIRS = "Received from "
 
     UI_HEX = re.compile(r"ui-cmd:.*\(0x([0-9a-fA-F]{1,2})\)")
@@ -605,12 +619,15 @@ class CecDriver(Driver):
         # *new* address. "any": inside a SET_STREAM_PATH or ACTIVE_SOURCE.
         awaiting: str | None = None
         mine = False
+        deaf_until = 0.0
         for line in self._proc.stdout:
             # Header lines start at column zero and say which direction the message
             # went; the operands that follow are indented and say nothing about it.
             if line.startswith(self.MINE):
                 mine = True
                 awaiting = None
+                if "USER_CONTROL" in line:
+                    deaf_until = time.monotonic() + self.ECHO_WINDOW
                 continue
             if line.startswith(self.THEIRS):
                 mine = False        # and fall through: this line names the message
@@ -638,6 +655,11 @@ class CecDriver(Driver):
                 held = None
                 continue
 
+            if time.monotonic() < deaf_until:
+                # Screen-owner tracking above still runs: ROUTING_CHANGE is the
+                # television telling us it switched, which is exactly what we asked
+                # for and the one thing worth hearing right now.
+                continue
             match = self.UI_HEX.search(line)
             code = int(match.group(1), 16) if match else None
             if code is None:
