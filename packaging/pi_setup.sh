@@ -221,6 +221,11 @@ apt-get install -y --no-install-recommends cifs-utils smbclient
 # must not be root. This helper is the only bridge: one program, four verbs, no shell path.
 install -m 0755 "$REPO/packaging/tub3-nas" /usr/local/sbin/tub3-nas
 
+# Teaching the infrared remote is the same shape of problem: writing to the Flirc
+# dongle's HID interface is root's job, and the settings page that walks you through
+# it is not root. One program, four verbs, an allowlist of keystrokes, no shell path.
+install -m 0755 "$REPO/packaging/tub3-flirc" /usr/local/sbin/tub3-flirc
+
 # The CEC bus monitor needs CAP_NET_ADMIN to enter monitor mode. Without it the adapter
 # still delivers messages addressed to this box — which is why the television's remote works
 # either way — and silently drops broadcasts. The broadcasts are `ROUTING_CHANGE` and
@@ -237,6 +242,7 @@ chmod 0440 /etc/sudoers.d/tub3-cec
 # ability to mount a share, and nothing else.
 cat > /etc/sudoers.d/tub3-nas <<SUDO
 $RUN_USER ALL=(root) NOPASSWD: /usr/local/sbin/tub3-nas
+$RUN_USER ALL=(root) NOPASSWD: /usr/local/sbin/tub3-flirc
 SUDO
 chmod 0440 /etc/sudoers.d/tub3-nas
 # A malformed sudoers file locks everyone out of sudo, so validate before trusting it.

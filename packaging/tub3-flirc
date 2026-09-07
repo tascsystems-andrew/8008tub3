@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+"""Teach a Flirc dongle, as root, on behalf of the settings page.
+
+Flirc is not a kernel infrared receiver. Its own firmware turns infrared into USB keystrokes,
+so once it is taught, nothing in this project needs to know infrared exists — `EvdevDriver`
+reads it as an ordinary keyboard. Teaching it means writing to the dongle's HID interface,
+which is root's job, and the settings server is deliberately not root.
+
+The shape of the trust boundary, same as `tub3-nas`:
+
+  - Reads its request as JSON on **stdin**, never argv.
+  - Accepts four verbs and nothing else. There is no "run flirc_util with these arguments"
+    path, because that is the same thing as a remote shell.
+  - Validates the key against an explicit allowlist, not a pattern. The key becomes an
+    argument to another program, and a list of forty exact strings is the only validation
+    that cannot be wrong. The list is duplicated from the settings page on purpose: a trust
+    boundary that trusts its caller's list is not one.
+
+Invoked as:  sudo /usr/local/sbin/tub3-flirc   with JSON on stdin.
+"""
+
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+import sys
+
+FLIRC = "/usr/local/bin/flirc_util"
+
+# Exactly the keystrokes this television can act on, and nothing else. Anything absent here
+# cannot be recorded — which is the point. Compare tuner/input.py EVDEV_MAP and EVDEV_DIGITS:
+# every entry below lands on a verb there, or it would teach a button that does nothing.
+ALLOWED = frozenset({
+    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",   # DIGIT
+    "up", "down",                                       # UP / DOWN
+    "vol_up", "vol_down", "mute",                       # VOLUME_UP / VOLUME_DOWN / MUTE
+    "enter", "tab",                                     # SELECT
+    "escape",                                           # BACK
+    # Function keys, because Flirc's vocabulary has no KEY_POWER and its `suspend` would
+    # suspend the Raspberry Pi rather than the television.
+    "F12",                                              # POWER
+    "F1",                                               # LAST  (PREV.CH)
+    "F2",                                               # GUIDE
+    "F3",                                               # INFO
+})
+
+# Long enough for someone to aim a remote and press, short enough that a browser waiting on
+# the answer does not look hung. flirc_util's own record loop ends when it sees a signal.
+RECORD_TIMEOUT = 20.0
+
+
+def fail(message: str, **extra) -> None:
+    print(json.dumps({"ok": False, "error": message, **extra}))
+    sys.exit(0)          # the caller reads JSON; a non-zero exit tells it nothing extra
+
+
+def ok(**payload) -> None:
+    print(json.dumps({"ok": True, **payload}))
+    sys.exit(0)
+
+
+def run(args: list[str], timeout: float) -> tuple[int, str]:
+    try:
+        done = subprocess.run([FLIRC, *args], capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return 124, "timed out"
+    return done.returncode, ((done.stdout or "") + (done.stderr or "")).strip()
+
+
+def recorded_keys() -> list[dict]:
+    """What the dongle currently knows, parsed out of `flirc_util settings`."""
+    code, out = run(["settings"], timeout=15)
+    if code not in (0, None):
+        return []
+    keys, seen_header = [], False
+    for line in out.splitlines():
+        if line.strip().startswith("Index"):
+            seen_header = True
+            continue
+        if not seen_header or line.strip().startswith("-----") or not line.strip():
+            continue
+        parts = line.split()
+        if len(parts) >= 5 and parts[0].isdigit():
+            keys.append({"index": int(parts[0]), "key": parts[-1]})
+    return keys
+
+
+def main() -> None:
+    if not shutil.which(FLIRC) and not sys.path:
+        fail("flirc_util is not installed.")
+    try:
+        request = json.load(sys.stdin)
+    except (json.JSONDecodeError, ValueError):
+        fail("The request was not readable JSON.")
+    if not isinstance(request, dict):
+        fail("The request was not an object.")
+
+    action = request.get("action")
+
+    if action == "list":
+        ok(keys=recorded_keys())
+
+    if action == "record":
+        key = request.get("key")
+        if key not in ALLOWED:
+            # Deliberately does not echo the value back: a rejected key is a programming
+            # error or an attempt, and neither is improved by reflecting it into a page.
+            fail("That is not a key this television can act on.")
+        code, out = run(["record", key], timeout=RECORD_TIMEOUT)
+        if code == 124:
+            fail("No button was seen. Aim the remote at the dongle and try again.",
+                 timedOut=True)
+        # flirc_util reports an already-known infrared code as an error, which is worth
+        # saying plainly rather than as a failure: the button is taught, just not to this key.
+        lowered = out.lower()
+        if "already exists" in lowered or "button exists" in lowered:
+            fail("That button is already taught to something else. Forget it first.",
+                 alreadyKnown=True)
+        if code != 0:
+            fail(out.splitlines()[-1] if out else "The dongle refused to record that.")
+        ok(key=key, keys=recorded_keys())
+
+    if action == "forget":
+        index = request.get("index")
+        if not isinstance(index, int) or index < 0:
+            fail("Which recorded button should be forgotten?")
+        code, out = run(["delete_index", str(index)], timeout=15)
+        if code != 0:
+            fail(out.splitlines()[-1] if out else "Could not forget that button.")
+        ok(keys=recorded_keys())
+
+    if action == "clear":
+        code, out = run(["format"], timeout=30)
+        if code != 0:
+            fail(out.splitlines()[-1] if out else "Could not clear the dongle.")
+        ok(keys=recorded_keys())
+
+    fail("Unknown action.")
+
+
+if __name__ == "__main__":
+    main()
