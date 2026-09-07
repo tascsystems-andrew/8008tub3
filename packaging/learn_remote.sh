@@ -26,17 +26,25 @@ BUTTONS=(
   "5|5|channel 5"                       "6|6|channel 6"
   "7|7|channel 7"                       "8|8|channel 8"
   "9|9|channel 9"                       "0|0|channel 0"
-  "CHANNEL UP|up|next channel"          "CHANNEL DOWN|down|previous channel"
-  "VOLUME UP|vol_up|louder (repeats when held)"
-  "VOLUME DOWN|vol_down|quieter (repeats when held)"
+  "CH +|up|next channel"                "CH -|down|previous channel"
+  # The d-pad arrows record to the same keys as CH +/-. Flirc stores one entry per infrared
+  # code, so two buttons can share a keystroke: the pad and the rocker then both work, and
+  # the box never has to know there were two.
+  "D-PAD UP|up|same as CH +"            "D-PAD DOWN|down|same as CH -"
+  "VOL +|vol_up|louder (repeats when held)"
+  "VOL -|vol_down|quieter (repeats when held)"
   "MUTE|mute|mute"
-  "OK / SELECT|enter|select"            "MENU|tab|open the menu"
-  "EXIT / BACK|escape|back"
+  "OK|enter|select"                     "MENU|tab|open the menu"
+  "BACK|escape|back"
+  # Flirc's vocabulary has no KEY_POWER, and its `suspend` would put the Pi to sleep rather
+  # than the television, so POWER is an F-key that EVDEV_MAP translates. F5 is avoided
+  # throughout the list: it already means SELECT.
   "POWER|F12|television on/off"
-  "LAST CHANNEL|F1|jump to the previous channel"
-  "GUIDE|F2|jump to the guide"
-  "INFO / DISPLAY|F3|show the channel bug again"
+  "PREV.CH|F1|jump back to the last channel"
+  "SOURCE|F2|jump to the guide"
+  "INFO|F3|show the channel bug again"
 )
+
 
 echo
 echo "  Teaching the Flirc. Point the remote at it and press the button named."
