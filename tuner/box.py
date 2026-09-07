@@ -203,8 +203,8 @@ class Box:
         volume: Callable[[str], None] | None = None,
         tv_state: Callable[[], str] | None = None,
         take_input: Callable[[], None] | None = None,
-        hand_over: Callable[[str], None] | None = None,
-        handover_address: str | None = None,
+        select_input: Callable[[int], None] | None = None,
+        other_port: int | None = None,
         our_address: str | None = None,
     ):
         self.lineup = lineup
@@ -222,8 +222,10 @@ class Box:
         # The mirror of it: telling the set to show something else. Together they make
         # one button that swaps the television between this box and whatever else is
         # plugged in, which is what SOURCE means on the remote it is printed on.
-        self._hand_over = hand_over
-        self._handover_address = handover_address
+        self._select_input = select_input
+        # Which socket everything else is plugged into. Ours is read from EDID;
+        # this one has to be told, because nothing on the bus reliably says.
+        self._other_port = other_port
         self._handover_pending = False
         # Our physical address, as the television numbers its ports. Compared against
         # whatever the bus last announced, to answer "are we what is showing?".
@@ -1110,27 +1112,32 @@ class Box:
             pass
 
     def _handover_now(self) -> None:
-        """Swap the television between us and the other input.
+        """Swap the television between us and whatever else is plugged in.
 
         Which way round is read from the bus rather than remembered. The set announces
-        every input change itself, so `_screen_is_ours` is true even when the switch
-        was made with the television's own remote — a flag kept here would drift the
-        first time anyone did that, and the button would then need pressing twice.
+        every input change itself, so this stays right even when the switch was made
+        with the television's own remote — a flag kept here would drift the first time
+        anyone did that, and the button would then need pressing twice.
+
+        Stepping forward is a cycle, not a jump: the set is being driven by its own
+        INPUT button and that is what that button does. Coming back is exact.
         """
-        if self._screen_is_ours():
-            target = self._handover_address
-            if not target or self._hand_over is None:
-                print("  source: nowhere to hand the television to "
-                      "(set handover_address in settings)")
-                return
-            print(f"  source: handing the television to {target}")
-            try:
-                self._hand_over(target)
-            except Exception:  # noqa: BLE001 - a set that will not switch is not fatal
-                pass
-        else:
-            print("  source: taking the television back")
-            self._take_input_now()
+        if self._select_input is None:
+            return
+        from tub3.cec import port_of  # noqa: PLC0415 - tuner does not import tub3 at load
+
+        ours = port_of(self._our_address)
+        going_out = self._screen_is_ours()
+        port = self._other_port if going_out else ours
+        if port is None:
+            print("  source: no idea which socket to ask for")
+            return
+        print(f"  source: {'handing the television over' if going_out else 'taking it back'}"
+              f" — HDMI {port}")
+        try:
+            self._select_input(port)
+        except Exception:  # noqa: BLE001 - a set that will not switch is not fatal
+            pass
 
     def _wake_now(self) -> None:
         """Wake the television without touching the box's own power state.

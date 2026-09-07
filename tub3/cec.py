@@ -32,9 +32,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 CEC_DEVICE = "/dev/cec0"
-# A physical address is four dot-separated nibbles. Checked before it reaches a
-# command line, like every other externally-supplied value in this project.
-_PHYS_RE = __import__("re").compile(r"^[0-9A-Fa-f]\.[0-9A-Fa-f]\.[0-9A-Fa-f]\.[0-9A-Fa-f]$")
 CMDLINE = Path("/boot/firmware/cmdline.txt")
 CMDLINE_LEGACY = Path("/boot/cmdline.txt")
 
@@ -250,20 +247,42 @@ def take_input() -> bool:
     return send("active-source").ok
 
 
-def hand_input_to(phys: str) -> bool:
-    """Ask the television to show a different input.
+def select_input(port: int) -> bool:
+    """Switch the television to an HDMI port, by driving its own input menu.
 
-    `Set Stream Path` is the mirror of `take_input`: that one says "show us", this one
-    says "show whatever is at this address". It is a broadcast and the *television*
-    acts on it, which is what makes it work for a device that is not on the bus at all
-    — an Apple TV asleep on HDMI 1 cannot announce itself, but the set can still be
-    told to switch to it.
+    Not `Set Stream Path`, which is the message the specification provides for exactly this
+    and which this television ignores completely. Captured on the bus: the broadcast goes
+    out and nothing answers — no routing change, no active source, from the set or from the
+    device being asked for. The spec puts that message in the television's hands, and sets
+    generally obey only `Active Source`, from the device that wants the screen itself. A box
+    cannot reliably nominate a third party that way, and `Active Source` did not bring this
+    one back either.
+
+    What the set does obey is its own remote. `input-select` opens the input menu and moves
+    the highlight one place; `select` confirms. The menu opens on HDMI 1, so the number of
+    presses is simply the port number — which is why this takes a port and not an address.
+
+    Every message goes in ONE `cec-ctl` invocation, and that is the whole trick. Sent as
+    separate calls the sequence took about three seconds — half a second of process startup
+    each — and the menu timed out and closed before the confirmation arrived, so the
+    highlight moved and then sprang back.
     """
-    if not _PHYS_RE.match(phys or ""):
+    if not 1 <= port <= 8:
         return False
-    code, _ = _run(["cec-ctl", "-d", CEC_DEVICE,
-                    "--set-stream-path", f"phys-addr={phys}"])
+    args = ["cec-ctl", "-d", CEC_DEVICE, "--to", TV_ADDRESS]
+    for _ in range(port):
+        args += ["--user-control-pressed", "ui-cmd=input-select", "--user-control-released"]
+    args += ["--user-control-pressed", "ui-cmd=select", "--user-control-released"]
+    code, _ = _run(args, timeout=12.0)
     return code == 0
+
+
+def port_of(phys: str | None) -> int | None:
+    """Which HDMI socket a physical address describes. 2.0.0.0 is HDMI 2."""
+    if not phys:
+        return None
+    head = phys.split(".")[0]
+    return int(head) if head.isdigit() and head != "0" else None
 
 
 def our_address() -> str | None:

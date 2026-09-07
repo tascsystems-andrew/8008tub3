@@ -10,5 +10,5 @@
   "ad_load": 3,
   "fullscreen": true,
   "subtitles": false,
-  "handover_address": "1.0.0.0"
+  "other_input_port": 1
 }
