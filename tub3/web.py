@@ -124,6 +124,19 @@ def nas(request: dict, timeout: float = 60.0) -> dict:
 
 FLIRC_HELPER = "/usr/local/sbin/tub3-flirc"
 
+# What the dongle currently knows, remembered.
+#
+# `flirc_util settings` takes three and a half seconds — measured on this box, and it
+# is the USB round trip enumerating the key table, not anything here. The settings page
+# asks on every load, so without this the page waited three and a half seconds to draw
+# a card that almost always says the same thing.
+#
+# Invalidated by writing, not by a clock: the only thing that changes what the dongle
+# knows is this server teaching it something, so a stale read is not possible from
+# here. Someone running flirc_util by hand over ssh would go unnoticed until a restart,
+# which is a trade worth making for four seconds a page.
+_flirc_keys: list | None = None
+
 
 def flirc(request: dict, timeout: float = 30.0) -> dict:
     """Ask the root helper to do one thing to the infrared dongle.
@@ -146,9 +159,21 @@ def flirc(request: dict, timeout: float = 30.0) -> dict:
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "The dongle took too long to answer."}
     try:
-        return json.loads(result.stdout or "{}")
+        answer = json.loads(result.stdout or "{}")
     except json.JSONDecodeError:
         return {"ok": False, "error": "The remote helper returned something unreadable."}
+    global _flirc_keys
+    if answer.get("ok") and "keys" in answer:
+        _flirc_keys = answer["keys"]
+    return answer
+
+
+def flirc_keys(refresh: bool = False) -> dict:
+    """The dongle's key list, from memory when we already know it."""
+    global _flirc_keys
+    if _flirc_keys is not None and not refresh:
+        return {"ok": True, "keys": _flirc_keys, "cached": True}
+    return flirc({"action": "list"})
 
 
 BROWSE_ROOT = Path("/mnt/tub3")
@@ -269,6 +294,27 @@ def health_report(channels: list[dict]) -> dict:
         return health(channels)
     except Exception:  # noqa: BLE001 - the settings page must render regardless
         return {"level": "ok", "messages": [], "build": {}, "low_channels": []}
+
+
+_inventory_cache: tuple[str, float, dict] | None = None
+INVENTORY_TTL = 120.0
+
+
+def _cached_inventory(folder: str) -> dict:
+    """Count the commercials, but not four times a minute.
+
+    The folder is on the network share, so counting it costs about a second — measured
+    — and /api/status is polled every fifteen. That is a second of NAS traffic every
+    fifteen for a number that changes when someone adds a file, which is not often.
+    """
+    global _inventory_cache
+    now = time.time()
+    if (_inventory_cache and _inventory_cache[0] == folder
+            and now - _inventory_cache[1] < INVENTORY_TTL):
+        return _inventory_cache[2]
+    counted = ad_inventory(folder)
+    _inventory_cache = (folder, now, counted)
+    return counted
 
 
 def channel_status() -> list[dict]:
@@ -561,9 +607,12 @@ PAGE = """<!doctype html>
   <div class=hint>Click a button here, then point your remote at the dongle and press the
    matching button on it. The dongle learns the infrared code and sends a keystroke from
    then on, so the television needs no infrared support of its own.
-   <br><br>Two buttons can share a keystroke &mdash; the arrows above and below OK are
-   taught the same code as CH&nbsp;+ and CH&nbsp;&minus;, so either works and the tick
-   appears on both.
+   <br><br>Two buttons can share a keystroke. Teach both &#9650; and CH&nbsp;+ and either
+   will work; the tick appears on both, because the dongle stores one entry per infrared
+   code and the television only ever sees the keystroke.
+   <br><br>&#9668; and &#9658; currently do the same as channel up and down &mdash; that is
+   what a presentation clicker sends for previous and next, and the television has read them
+   that way since before it had a remote with a d-pad.
    <br><br>Nothing here can be pressed twice by accident: a code the dongle already knows is
    refused rather than silently moved.</div>
   <div style="margin-top:14px"><button class=ghost id=remoteclear>Forget every button</button></div>
@@ -891,15 +940,17 @@ const RKEYS=[
  {l:'4',k:'4'},{l:'5',k:'5'},{l:'6',k:'6'},
  {l:'7',k:'7'},{l:'8',k:'8'},{l:'9',k:'9'},
  {l:'PREV.CH',k:'F1'},{l:'0',k:'0'},{l:'MUTE',k:'mute'},
- {l:'VOL +',k:'vol_up'},{l:'▲ / CH +',k:'up'},{l:'CH +',k:'up'},
- {l:'VOL −',k:'vol_down'},{l:'▼ / CH −',k:'down'},{l:'CH −',k:'down'},
- {l:'BACK',k:'escape'},{l:'MENU',k:'tab'},{l:'OK',k:'enter'},
+ {l:'VOL +',k:'vol_up'},{l:'▲',k:'up'},{l:'CH +',k:'up'},
+ {l:'VOL −',k:'vol_down'},{l:'▼',k:'down'},{l:'CH −',k:'down'},
+ {l:'◄',k:'left'},{l:'OK',k:'enter'},{l:'►',k:'right'},
+ {l:'BACK',k:'escape'},{l:'MENU',k:'tab'},{l:'',k:null},
 ];
 let rtaught=new Set(), rbusy=false;
 
 function rdraw(){
   const g=$('#rgrid'); g.innerHTML='';
   RKEYS.forEach((b,i)=>{
+    if(!b.k){ g.appendChild(document.createElement('span')); return; }
     const el=document.createElement('button');
     el.className='rk'+(b.c?' '+b.c:'')+(rtaught.has(b.k)?' taught':'');
     el.textContent=b.l; el.dataset.key=b.k; el.dataset.idx=i;
@@ -1159,7 +1210,7 @@ class Handler(BaseHTTPRequestHandler):
                 "channels": channels,
                 "health": health_report(channels),
                 "settings": settings,
-                "inventory": ad_inventory(settings.get("commercials_dir", "")),
+                "inventory": _cached_inventory(settings.get("commercials_dir", "")),
                 "storage": _scrub(nas({"action": "status"}, timeout=10.0)),
                 "ad_loads": {
                     str(k): {"name": v[2], "detail": v[3]} for k, v in AD_LOAD.items()
@@ -1303,6 +1354,9 @@ class Handler(BaseHTTPRequestHandler):
             # may be recorded; repeating its allowlist here would be a second place to get it
             # wrong. `record` blocks while it waits for someone to press a button, which is
             # why the browser shows a countdown rather than a spinner.
+            if payload.get("action") == "list":
+                self._json(flirc_keys(refresh=bool(payload.get("refresh"))))
+                return
             self._json(flirc(payload, timeout=35.0))
             return
 

@@ -34,6 +34,10 @@ FLIRC = "/usr/local/bin/flirc_util"
 ALLOWED = frozenset({
     "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",   # DIGIT
     "up", "down",                                       # UP / DOWN
+    # The d-pad's sideways arrows. EVDEV_MAP already reads LEFT and RIGHT as UP and
+    # DOWN, because that is what a pen-style clicker sends for previous and next, so
+    # these work the moment they are taught.
+    "left", "right",
     "vol_up", "vol_down", "mute",                       # VOLUME_UP / VOLUME_DOWN / MUTE
     "enter", "tab",                                     # SELECT
     "escape",                                           # BACK
