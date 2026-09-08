@@ -77,8 +77,13 @@ AMBIANCE_EPOCH = datetime(2020, 1, 1).timestamp()
 
 def _ambiance(at: float, mapping: dict | None) -> dict:
     folder = _ambiance_folder()
-    from tuner.ambiance import clips_for  # noqa: PLC0415
+    from tuner.ambiance import clips_for, seconds_to_next_daypart  # noqa: PLC0415
     clips = clips_for(folder, when=at) if folder else []
+    # The slot never outlives the hour that chose it. Without this a client is handed a
+    # three-hour rain loop at half past three and is still raining at bedtime, while the
+    # television beside it changed at four: the box re-tunes on its own run loop, and an
+    # HTTP client has nothing to notice a boundary with.
+    left = seconds_to_next_daypart(at)
     if not clips:
         return {"channel": AMBIANCE_CHANNEL, "station": "AMBIANCE", "kind": "ambiance",
                 "off_air": True, "server_time": round(at, 3)}
@@ -96,7 +101,8 @@ def _ambiance(at: float, mapping: dict | None) -> dict:
         return {"channel": AMBIANCE_CHANNEL, "station": "AMBIANCE", "kind": "ambiance",
                 "server_time": round(at, 3),
                 "now": {"content_type": "ambiance", "title": clip.stem, "plex": hit,
-                        "offset_seconds": 0.0, "duration": 0.0, "remaining_seconds": 3600.0}}
+                        "offset_seconds": 0.0, "duration": 0.0,
+                        "remaining_seconds": round(min(3600.0, left), 2)}}
 
     position = (at - AMBIANCE_EPOCH) % total
     for clip, hit, seconds in resolved:
@@ -108,7 +114,7 @@ def _ambiance(at: float, mapping: dict | None) -> dict:
                 "now": {"content_type": "ambiance", "title": clip.stem, "plex": hit,
                         "offset_seconds": round(position, 2),
                         "duration": round(seconds, 2),
-                        "remaining_seconds": round(seconds - position, 2)},
+                        "remaining_seconds": round(min(seconds - position, left), 2)},
             }
         position -= seconds
     clip, hit, seconds = resolved[-1]     # unreachable except for float drift
@@ -116,7 +122,7 @@ def _ambiance(at: float, mapping: dict | None) -> dict:
             "server_time": round(at, 3),
             "now": {"content_type": "ambiance", "title": clip.stem, "plex": hit,
                     "offset_seconds": 0.0, "duration": round(seconds, 2),
-                    "remaining_seconds": round(seconds, 2)}}
+                    "remaining_seconds": round(min(seconds, left), 2)}}
 
 
 def _entry(item: dict, offset: float, mapping: dict | None) -> dict:

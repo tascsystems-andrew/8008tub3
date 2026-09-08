@@ -26,7 +26,7 @@ from __future__ import annotations
 import os
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 VIDEO_SUFFIXES = {".mp4", ".mkv", ".avi", ".mov", ".m4v", ".webm", ".mpg", ".mpeg"}
@@ -157,6 +157,28 @@ def _clips_for_month(folder: Path | None, when: float | None = None) -> list[Pat
               f"using {MONTH_NAMES[month - 1]} ({len(found)} clip(s))")
         return found
     return []
+
+
+def seconds_to_next_daypart(when: float | None = None) -> float:
+    """How long this hour's choice of clip stays the right one.
+
+    The box notices four o'clock on its own run loop, a quarter of a second after it passes.
+    A client that is handed one clip and plays it to the end has no way to notice at all — a
+    three-hour rain loop started at half past three is still raining at bedtime — so the slot
+    it is given has to carry the boundary inside it.
+
+    Built with `replace` rather than arithmetic on the epoch, so the two clock changes a year
+    do not move a boundary by an hour.
+    """
+    at = time.time() if when is None else when
+    stamp = datetime.fromtimestamp(at)
+    for hour, _ in DAYPART_HOURS:
+        edge = stamp.replace(hour=hour, minute=0, second=0, microsecond=0).timestamp()
+        if edge > at:
+            return edge - at
+    first = (stamp + timedelta(days=1)).replace(
+        hour=DAYPART_HOURS[0][0], minute=0, second=0, microsecond=0)
+    return first.timestamp() - at
 
 
 def daypart_at(when: float | None = None) -> str:

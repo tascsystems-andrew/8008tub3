@@ -387,6 +387,25 @@ def guide_rows(hours: float = 3.0) -> dict:
                     for number, name in discover_channels(DB)]
     except Exception:  # noqa: BLE001
         return {"now": now, "rows": []}
+
+    # And the ambiance loop, which the television's own guide has always carried.
+    #
+    # `discover_channels` reads DISTINCT station FROM liquid_blocks, and the loop has no
+    # blocks — it has no schedule at all, that is the point of it — so it fell out of the
+    # HTTP guide while remaining on the dial that `/api/tv/channels` serves. A client could
+    # therefore draw a row it could not tune, and tune a channel it could not see. Mirrors
+    # the lineup `tub3/app.py` builds, with the same guard it uses to decide the channel
+    # exists at all.
+    try:
+        from tuner.ambiance import clips_for  # noqa: PLC0415
+        from tuner.schedule import AmbianceChannel  # noqa: PLC0415
+
+        from .lineup import AMBIANCE_CHANNEL  # noqa: PLC0415
+        folder = load_settings().get("ambiance_dir")
+        if folder and clips_for(Path(folder)):
+            stations.append(AmbianceChannel(AMBIANCE_CHANNEL, "AMBIANCE", Path(folder)))
+    except Exception:  # noqa: BLE001 - a missing loop must not cost the listings
+        pass
     if not stations:
         return {"now": now, "rows": []}
 

@@ -219,6 +219,14 @@ def rows_from_lineup(lineup, now: float, guide_channel: int) -> list[Row]:
             span = getattr(airing, "programme_remaining", None)
             if span is None:
                 span = getattr(airing, "remaining", 1800.0)
+            if not span:
+                # A looping channel has no duration to report — its Program carries none,
+                # deliberately, because `Airing.remaining` is what Box housekeeping uses to
+                # decide when to advance and a loop must never advance. It does set `ends_at`,
+                # so ask that instead. Without this the row came back as a march of 60-second
+                # steps that the merge guard then refused, and the ambiance row was truncated
+                # on the television as well as absent from the browser.
+                span = float(getattr(airing, "ends_at", cursor)) - cursor
             end = cursor + max(60.0, float(span))
             if row.slots and row.slots[-1].key == key:
                 row.slots[-1].end = end          # same programme, extend it
