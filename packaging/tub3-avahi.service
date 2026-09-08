@@ -1,0 +1,29 @@
+<?xml version="1.0" standalone='no'?><!--*-nxml-*-->
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+
+<!-- How a television finds this box without anyone typing an address.
+
+     The app needs exactly one thing configured — where the box is — because everything else
+     it uses is discovered *from* the box at runtime: where Plex lives, what is on the dial,
+     the listings, the guide's music. So this file is the whole of the setup problem.
+
+     A private service type rather than _http._tcp: every printer, NAS and router on a home
+     network advertises _http._tcp, and a television that has to sift through them to find a
+     television is not an improvement on typing an address.
+
+     `replace-wildcards` puts the host name in the instance name, so two boxes on one network
+     are distinguishable in a picker rather than being two identical rows.
+
+     The port is substituted by pi_setup.sh from the same variable that writes the web unit,
+     because an advertisement that disagrees with the server is worse than none at all — it
+     sends a client somewhere nothing is listening and gives it nothing to retry.
+-->
+<service-group>
+  <name replace-wildcards="yes">8008TUB3 on %h</name>
+  <service>
+    <type>_tub3._tcp</type>
+    <port>__WEB_PORT__</port>
+    <txt-record>api=/api/tv</txt-record>
+    <txt-record>version=1</txt-record>
+  </service>
+</service-group>

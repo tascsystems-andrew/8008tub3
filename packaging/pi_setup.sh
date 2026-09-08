@@ -165,6 +165,10 @@ SERVICE
 # The settings page is its own service, deliberately. It must be reachable when the
 # television is *not* working — which is exactly when you need it — so it cannot be a
 # thread inside the process that is failing.
+# One port, named once. The settings page, the standby card and the Bonjour
+# advertisement all have to agree about it, and three literals would eventually not.
+WEB_PORT="${WEB_PORT:-8008}"
+
 cat > /etc/systemd/system/tub3-web.service <<SERVICE
 [Unit]
 Description=8008TUB3 settings page
@@ -177,7 +181,7 @@ Type=simple
 User=$RUN_USER
 WorkingDirectory=$REPO
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/usr/bin/python3 -m tub3.web --host 0.0.0.0 --port 8008
+ExecStart=/usr/bin/python3 -m tub3.web --host 0.0.0.0 --port $WEB_PORT
 Restart=always
 RestartSec=3
 
@@ -296,6 +300,14 @@ warn "Set the share password:  sudo smbpasswd -a $RUN_USER"
 # wsdd is what makes the share visible in Windows Explorer's network browser. Without it the
 # share works by \\hostname but is invisible, which reads as broken.
 systemctl enable --now wsdd avahi-daemon >/dev/null 2>&1 || true
+
+# Tell the network there is a television here, so the apps do not have to be told.
+if [ -d /etc/avahi/services ]; then
+    sed "s/__WEB_PORT__/$WEB_PORT/" "$REPO/packaging/tub3-avahi.service" \
+        > /etc/avahi/services/tub3.service
+    chmod 0644 /etc/avahi/services/tub3.service
+    systemctl reload avahi-daemon >/dev/null 2>&1 || true
+fi
 systemctl restart smbd >/dev/null 2>&1 || true
 
 say "Done"
