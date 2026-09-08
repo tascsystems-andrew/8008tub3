@@ -489,8 +489,12 @@ class Box:
         # `seek`, never `offset`. A programme interrupted by a mid-roll appears twice in the
         # plan and its second half carries a non-zero `skip` — punching in at `offset` alone
         # would restart it from the top of the file.
+        # `remaining`, not `duration`: it is the seconds left in this *entry*, which is what
+        # the player must stop at. `duration` stays because it means something else here —
+        # the seek-mode heuristic.
         result = self.player.tune(airing.program.path, airing.seek,
-                                  duration=airing.program.duration)
+                                  duration=airing.program.duration,
+                                  play_for=airing.remaining)
         self.last_latency_ms = result.latency_ms
         self._on_air = channel
         if seq != self._tune_seq:

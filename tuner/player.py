@@ -492,7 +492,8 @@ class MpvPlayer:
     EXACT_SEEK_UNDER = 90.0
 
     def tune(self, path: Path, offset: float, *, timeout: float = 8.0,
-             duration: float | None = None) -> TuneResult:
+             duration: float | None = None,
+             play_for: float | None = None) -> TuneResult:
         """Punch into a file at `offset`. Returns time to actual picture."""
         if not self.alive:
             return TuneResult(False, 0.0, "mpv exited")
@@ -508,6 +509,21 @@ class MpvPlayer:
         # Setting start= as a load option lets mpv seek during open, rather than opening,
         # decoding from zero, and then seeking.
         options = f"start=+{max(0.0, offset):.3f}"
+        # And where to stop, which is not the end of the file.
+        #
+        # A programme with mid-roll breaks appears in the plan more than once: the first part,
+        # the ad pod, then the rest. Each of those entries is a slice of one file, and playing
+        # a slice to end-of-file plays straight through the break and out the other side —
+        # which is the one thing this project exists to prevent. `length=` is relative to
+        # `start=`, so this stops exactly where the plan says the entry does, mpv reports the
+        # end, and `_advance_if_ended` steps to the pod.
+        #
+        # Upstream FieldStation42 did this — `stop_position = total_skip + (entry.duration -
+        # initial_skip)` in station_player.py, with a log line about clipping — and it was
+        # lost when the player was rewritten around mpv's IPC. Nothing else in this box
+        # watches the clock against an entry, so nothing noticed.
+        if play_for is not None and play_for > 0:
+            options += f",length={play_for:.3f}"
         response = self._command(
             ["loadfile", str(path), "replace", 0, options], timeout=timeout
         )
