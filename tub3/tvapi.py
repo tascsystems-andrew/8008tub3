@@ -20,6 +20,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from tuner.titles import describe
+
 from . import plexmap
 from .lineup import AMBIANCE_CHANNEL, GUIDE_CHANNEL
 
@@ -137,13 +139,30 @@ def _entry(item: dict, offset: float, mapping: dict | None) -> dict:
     # `skip` is how far into the file this entry starts — a programme split around an ad break
     # resumes partway in, and an app that ignored it would replay the first half.
     skip = float(item.get("skip") or 0)
+    # The real programme name, the same way the television gets it.
+    #
+    # `tuner.box` has used `describe` for its own channel bug since that bug existed, and
+    # `tuner.guide` for the listings — so the Pi showed "This Old House / The Reading House"
+    # while this endpoint handed the app
+    # "thisoldhouse__This Old House - S08E08 - The Reading House - 8 WEBDL-1080p", a pool
+    # prefix and a scene suffix wrapped around the answer. The app had built a regex to strip
+    # the prefix and swap dots for spaces, which is the client guessing at something the box
+    # already knew.
+    #
+    # Free at request time: `describe` reads a flat JSON map built at schedule time, so this
+    # costs a dict lookup and no Plex round trip. That is the whole point of titles.json.
+    show, episode = describe(path) if path else ("", "")
     return {
         "content_type": item.get("content_type"),
         "duration": round(duration, 2),
         "offset_seconds": round(skip + offset, 2),
         "remaining_seconds": round(max(0.0, duration - offset), 2),
         "plex": hit,                       # None when Plex cannot identify the file
+        # Kept, and still the pool stem: an older build of the app reads it and a field that
+        # changes meaning under a client is worse than one that is merely redundant.
         "title": Path(path).stem or None,
+        "show": show or None,
+        "episode": episode or None,
     }
 
 
