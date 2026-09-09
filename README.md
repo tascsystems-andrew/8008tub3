@@ -172,6 +172,22 @@ whole month plays anyway. A wrong hour is a blemish; an empty channel is a fault
 - **`interstitials`** — optional, short filler between programmes on channels for very small
   children, where an ad break is the wrong texture.
 
+### The box owns the lineup
+
+`lineup.json` lives on the box, at `~/8008tub3/lineup.json`, and nowhere else. There is no
+copy on the Mac and there is none in git — it carries real media paths, which is why it is on
+line 17 of `.gitignore`, and this repository is public.
+
+That is a rule rather than an accident, and it was not always true. Two copies were kept in
+sync by hand with `scp`, and `deploy_to_pi.sh` did not exclude the file, so a deploy pushed
+the Mac's dial over the box's silently — with no version history to recover from and no
+warning, because a gitignored file cannot appear in the script's uncommitted-changes check.
+It cost nothing only because the two copies happened to be identical. The moment anything
+edits the dial on the box, which is the whole point of the channel editor, a deploy would
+have destroyed that edit.
+
+So: edit it on the box. Snapshots are kept in `~/8008tub3/lineup-history/`.
+
 ### 4. Check it before it writes anything
 
 ```bash
