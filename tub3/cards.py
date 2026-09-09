@@ -155,8 +155,24 @@ def card_clip(
     tone_hz: int = 0,
 ) -> Path:
     """Turn a card into a short clip with silence (or a test tone) under it."""
+    # The cache is keyed on what the card SAYS, not merely on the file being there.
+    #
+    # Encoding one of these is slow enough that re-doing it on every apply is not an option,
+    # so this used to return early whenever the file existed. That is correct right up until
+    # a channel is renamed: the card is still there, so nothing regenerates, and the station
+    # keeps identifying itself by its old name on air with no error anywhere. Channel 17 was
+    # called SUPPERTIME for exactly one apply and introduced itself that way afterwards.
+    #
+    # A sidecar holding the exact heading and subheading is enough. Same text, keep the
+    # encode; different text, redo it.
+    marker = dest.with_suffix(".card")
+    identity = f"{heading}\n{subheading}\n{seconds}\n{tone_hz}"
     if dest.exists() and dest.stat().st_size > 4096:
-        return dest
+        try:
+            if marker.read_text() == identity:
+                return dest
+        except OSError:
+            pass   # no marker: an older clip, from before this was keyed. Redo it once.
 
     still = dest.with_suffix(".png")
     card(still, heading=heading, subheading=subheading)
@@ -187,6 +203,12 @@ def card_clip(
         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True,
     )
     still.unlink(missing_ok=True)
+    # Only after ffmpeg succeeded: a marker written ahead of a failed encode would cache a
+    # clip that does not exist.
+    try:
+        marker.write_text(identity)
+    except OSError:
+        pass
     return dest
 
 
