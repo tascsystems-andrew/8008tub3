@@ -469,7 +469,7 @@ def check_sources(channels: list[Channel]) -> list[str]:
     return problems
 
 
-def audit(channels: list[Channel]) -> tuple[list[str], list[str]]:
+def audit(channels: list[Channel]) -> tuple[list[str], list[str], list[str], list[str]]:
     """Refuse a lineup that puts unrated content on a channel rated for children.
 
     This exists because the dial is meant to be *proposed* by a model reading a manifest,
@@ -510,6 +510,24 @@ def audit(channels: list[Channel]) -> tuple[list[str], list[str]]:
     from .plex import lookup as plex_lookup  # noqa: PLC0415
 
     problems: list[str] = []
+    # Sources the watershed check could not form an opinion about. Previously these were
+    # skipped with a bare `continue` and no record, so a lineup could pass the audit with the
+    # guard never having looked at part of it. Two of the fifteen channels were in that state
+    # — THE PICTURES and MATINEE, the two film libraries — for as long as this check has
+    # existed, because a library root holds many films and Plex indexes each film, not the
+    # root. Silence is the wrong answer to "I do not know".
+    unjudged: list[str] = []
+    # A source that is a whole library rather than one title.
+    #
+    # Its own tier, because it is a different claim. "Californication is rated TV-MA and airs
+    # at one o'clock" is a fact about a programme and refusing it is right. "The Movies
+    # library contains 54 R-rated films and this channel draws from it all afternoon" is a
+    # fact about a *range* — the scheduler picks one film per slot and this check cannot see
+    # which. Refusing it would block every edit to the dial on something no edit can fix,
+    # which is how a safety check ends up switched off. It warns, loudly, and the real answer
+    # is per-film scheduling once Plex is the catalogue rather than a lookup aid.
+    mixed: list[str] = []
+
     # Honoured overrides, returned alongside the refusals so a caller can print them. They
     # are not warnings and not errors — they are decisions, and they get said out loud.
     overrides: list[str] = []
@@ -537,25 +555,48 @@ def audit(channels: list[Channel]) -> tuple[list[str], list[str]]:
         for tag, hours in daylight.items():
             for folder in channel.sources.get(tag, []):
                 item = plex_lookup(plex_index, Path(folder)) if plex_index else None
-                if item is None:
-                    # Nothing to judge it by. The children's-hours check below still applies
-                    # on kids and family channels; refusing every unmatched title on every
-                    # channel would empty the dial over a Plex outage.
-                    continue
-                code = (item.content_rating or "").split("/")[-1].strip().lower()
+                if item is not None:
+                    code = (item.content_rating or "").split("/")[-1].strip().lower()
+                    worst = item.content_rating
+                else:
+                    # No item for the folder itself. That is the normal shape of a film
+                    # library — the root holds many films and Plex indexes each film — so
+                    # descend and judge by the strictest rating inside it. A folder is only
+                    # as safe for teatime as the worst thing it can play.
+                    code, worst, total, over = _strictest_inside(plex_index, Path(folder))
+                    if code is not None and code in OVER_14A and folder not in channel.rated_daytime:
+                        span = f"{min(hours):02d}:00-{max(hours) + 1:02d}:00"
+                        mixed.append(
+                            f"channel {channel.number} ({channel.name!r}) draws {folder!r} at "
+                            f"{span} — {over} of {total} titles there are above 14A or "
+                            f"unrated (worst: {worst}). The scheduler picks one per slot and "
+                            f"this check cannot see which"
+                        )
+                        continue
+                    if code is None:
+                        # Genuinely nothing to go on: Plex is unreachable, or it holds
+                        # nothing under this path at all. Say so rather than skipping in
+                        # silence — the children's-hours check below still applies, and
+                        # refusing every unmatched title would empty the dial over an outage.
+                        unjudged.append(
+                            f"channel {channel.number} ({channel.name!r}) airs {folder!r} "
+                            f"before the {WATERSHED_HOUR}:00 watershed, and Plex knows "
+                            f"nothing about it — the watershed cannot be checked here"
+                        )
+                        continue
                 if code not in OVER_14A:
                     continue
                 if folder in channel.rated_daytime:
                     overrides.append(
                         f"channel {channel.number} ({channel.name!r}) airs {folder!r} before "
                         f"the {WATERSHED_HOUR}:00 watershed by explicit override — "
-                        f"Plex rates it {item.content_rating}"
+                        f"Plex rates it {worst}"
                     )
                     continue
                 span = f"{min(hours):02d}:00-{max(hours) + 1:02d}:00"
                 problems.append(
                     f"channel {channel.number} ({channel.name!r}) airs {folder!r} at {span}, "
-                    f"but Plex rates it {item.content_rating} — nothing above 14A may air "
+                    f"but Plex rates it {worst} — nothing above 14A may air "
                     f"before {WATERSHED_HOUR}:00"
                 )
 
@@ -629,8 +670,55 @@ def audit(channels: list[Channel]) -> tuple[list[str], list[str]]:
                     f"channel {channel.number} ({channel.name!r}) vets {folder!r} for "
                     f"children's hours, but no tag on this channel draws from it"
                 )
+        # The same rule for the watershed list, which did not have it. A stale exemption is
+        # worse here than above: `rated_daytime` is the line that says "air this before eight
+        # regardless", and a list carrying names the channel no longer plays is how such a
+        # list stops being read carefully.
+        for folder in channel.rated_daytime:
+            if folder not in listed:
+                problems.append(
+                    f"channel {channel.number} ({channel.name!r}) exempts {folder!r} from "
+                    f"the {WATERSHED_HOUR}:00 watershed, but no tag on this channel draws "
+                    f"from it"
+                )
 
-    return problems, overrides
+    return problems, overrides, unjudged, mixed
+
+
+def _strictest_inside(plex_index: dict,
+                      folder: Path) -> tuple[str | None, str | None, int, int]:
+    """The harshest content rating Plex holds for anything under this path.
+
+    For a source that names a library root rather than one title. `path_index` is keyed by
+    the paths Plex knows, so this asks it which of those sit under `folder` — no filesystem
+    walk, no share access, and no second request.
+
+    Returns `(code, as_plex_wrote_it, titles, above_the_line)`, or `(None, None, 0, 0)` when
+    Plex holds nothing here at all. The counts are what makes the warning worth reading: one
+    R film among two hundred is a different thing from a library that is mostly R.
+    Unrated counts as strictest, because `OVER_14A` already treats it that way and this must
+    not be the one place that quietly disagrees.
+    """
+    from .plex import lookup as plex_lookup  # noqa: PLC0415
+
+    prefix = folder.name.strip().lower() + "/"
+    worst_code: str | None = None
+    worst_text: str | None = None
+    seen: set[int] = set()
+    total = over = 0
+    for key, item in plex_index.items():
+        if not key.startswith(prefix) or id(item) in seen:
+            continue
+        seen.add(id(item))
+        total += 1
+        code = (item.content_rating or "").split("/")[-1].strip().lower()
+        if code in OVER_14A:
+            over += 1
+            if worst_code not in OVER_14A:
+                worst_code, worst_text = code, item.content_rating or "nothing"
+        elif worst_code is None:
+            worst_code, worst_text = code, item.content_rating
+    return worst_code, worst_text, total, over
 
 
 def _iter_videos(folder: Path, *, sort: bool = True):
@@ -997,7 +1085,7 @@ def apply(lineup_path: Path, media_root: Path, ads_root: Path,
 
     # Both checks before anything is written. A lineup that fails either is not partially
     # applied.
-    problems, overrides = audit(channels)
+    problems, overrides, unjudged, mixed = audit(channels)
     # Said out loud on every build, not just the first. An override is a standing decision
     # about what a child may be shown, and the failure mode of these is that they go quiet
     # and stop being reconsidered.
@@ -1091,11 +1179,24 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     channels = load(args.lineup)
-    problems, overrides = audit(channels)
+    problems, overrides, unjudged, mixed = audit(channels)
     clashes = check_reserved(channels)
     missing = check_sources(channels)
     if args.dry_run:
         print()
+        # Between VETTED and REFUSED on purpose: not safe, not unsafe, unknown — and the
+        # whole point of the list is that "unknown" used to print as nothing at all.
+        if mixed:
+            print("  MIXED — this source can play something above the line before "
+                  f"{WATERSHED_HOUR}:00:\n")
+            for note in mixed:
+                print(f"    ~ {note}")
+            print()
+        if unjudged:
+            print("  UNJUDGED — the watershed could not be checked here:\n")
+            for note in unjudged:
+                print(f"    ? {note}")
+            print()
         if overrides:
             print("  VETTED — allowed in children's hours by explicit override:\n")
             for note in overrides:
