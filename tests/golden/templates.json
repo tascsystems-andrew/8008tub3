@@ -1,0 +1,199 @@
+{
+  "10": {
+    "days": {
+      "friday": "daily",
+      "monday": "daily",
+      "saturday": "daily",
+      "sunday": "daily",
+      "thursday": "daily",
+      "tuesday": "daily",
+      "wednesday": "daily"
+    },
+    "templates": [
+      "daily"
+    ]
+  },
+  "11": {
+    "days": {
+      "friday": "daily",
+      "monday": "daily",
+      "saturday": "daily",
+      "sunday": "daily",
+      "thursday": "daily",
+      "tuesday": "daily",
+      "wednesday": "daily"
+    },
+    "templates": [
+      "daily"
+    ]
+  },
+  "12": {
+    "days": {
+      "friday": "daily",
+      "monday": "daily",
+      "saturday": "daily",
+      "sunday": "daily",
+      "thursday": "daily",
+      "tuesday": "daily",
+      "wednesday": "daily"
+    },
+    "templates": [
+      "daily"
+    ]
+  },
+  "14": {
+    "days": {
+      "friday": "daily",
+      "monday": "daily",
+      "saturday": "daily",
+      "sunday": "daily",
+      "thursday": "daily",
+      "tuesday": "daily",
+      "wednesday": "daily"
+    },
+    "templates": [
+      "daily"
+    ]
+  },
+  "15": {
+    "days": {
+      "friday": "daily",
+      "monday": "daily",
+      "saturday": "daily",
+      "sunday": "daily",
+      "thursday": "daily",
+      "tuesday": "daily",
+      "wednesday": "daily"
+    },
+    "templates": [
+      "daily"
+    ]
+  },
+  "16": {
+    "days": {
+      "friday": "daily",
+      "monday": "daily",
+      "saturday": "daily",
+      "sunday": "daily",
+      "thursday": "daily",
+      "tuesday": "daily",
+      "wednesday": "daily"
+    },
+    "templates": [
+      "daily"
+    ]
+  },
+  "17": {
+    "days": {
+      "friday": "daily",
+      "monday": "daily",
+      "saturday": "daily",
+      "sunday": "daily",
+      "thursday": "daily",
+      "tuesday": "daily",
+      "wednesday": "daily"
+    },
+    "templates": [
+      "daily"
+    ]
+  },
+  "3": {
+    "days": {
+      "friday": "daily",
+      "monday": "daily",
+      "saturday": "saturday",
+      "sunday": "saturday",
+      "thursday": "daily",
+      "tuesday": "daily",
+      "wednesday": "daily"
+    },
+    "templates": [
+      "daily",
+      "saturday"
+    ]
+  },
+  "4": {
+    "days": {
+      "friday": "daily",
+      "monday": "daily",
+      "saturday": "daily",
+      "sunday": "daily",
+      "thursday": "daily",
+      "tuesday": "daily",
+      "wednesday": "daily"
+    },
+    "templates": [
+      "daily"
+    ]
+  },
+  "5": {
+    "days": {
+      "friday": "daily",
+      "monday": "daily",
+      "saturday": "daily",
+      "sunday": "daily",
+      "thursday": "daily",
+      "tuesday": "daily",
+      "wednesday": "daily"
+    },
+    "templates": [
+      "daily"
+    ]
+  },
+  "6": {
+    "days": {
+      "friday": "daily",
+      "monday": "daily",
+      "saturday": "daily",
+      "sunday": "daily",
+      "thursday": "daily",
+      "tuesday": "daily",
+      "wednesday": "daily"
+    },
+    "templates": [
+      "daily"
+    ]
+  },
+  "7": {
+    "days": {
+      "friday": "daily",
+      "monday": "daily",
+      "saturday": "daily",
+      "sunday": "daily",
+      "thursday": "daily",
+      "tuesday": "daily",
+      "wednesday": "daily"
+    },
+    "templates": [
+      "daily"
+    ]
+  },
+  "8": {
+    "days": {
+      "friday": "daily",
+      "monday": "daily",
+      "saturday": "daily",
+      "sunday": "daily",
+      "thursday": "daily",
+      "tuesday": "daily",
+      "wednesday": "daily"
+    },
+    "templates": [
+      "daily"
+    ]
+  },
+  "9": {
+    "days": {
+      "friday": "daily",
+      "monday": "daily",
+      "saturday": "daily",
+      "sunday": "daily",
+      "thursday": "daily",
+      "tuesday": "daily",
+      "wednesday": "daily"
+    },
+    "templates": [
+      "daily"
+    ]
+  }
+}

@@ -1,0 +1,1528 @@
+{
+  "10": {
+    "station_conf": {
+      "be_right_back_media": "runtime/tub3_brb.png",
+      "break_duration": 120,
+      "break_strategy": "standard",
+      "bump_dir": "bump-ch10",
+      "channel_number": 10,
+      "commercial_dir": "ads-late",
+      "commercial_free": false,
+      "content_dir": "/private<POOLS>/st10",
+      "day_templates": {
+        "daily": {
+          "0": {
+            "tags": "shows-dark"
+          },
+          "1": {
+            "tags": "shows-dark"
+          },
+          "10": {
+            "tags": "shows-drama"
+          },
+          "11": {
+            "tags": "shows-drama"
+          },
+          "12": {
+            "tags": "shows-drama"
+          },
+          "13": {
+            "tags": "shows-drama"
+          },
+          "14": {
+            "tags": "shows-drama"
+          },
+          "15": {
+            "tags": "shows-drama"
+          },
+          "16": {
+            "tags": "shows-drama"
+          },
+          "17": {
+            "tags": "shows-drama"
+          },
+          "18": {
+            "tags": "shows-drama"
+          },
+          "19": {
+            "tags": "shows-drama"
+          },
+          "2": {
+            "tags": "shows-dark"
+          },
+          "20": {
+            "tags": "shows-dark"
+          },
+          "21": {
+            "tags": "shows-dark"
+          },
+          "22": {
+            "tags": "shows-dark"
+          },
+          "23": {
+            "tags": "shows-dark"
+          },
+          "3": {
+            "tags": "shows-dark"
+          },
+          "4": {
+            "tags": "shows-dark"
+          },
+          "5": {
+            "tags": "shows-dark"
+          },
+          "6": {
+            "tags": "shows-drama"
+          },
+          "7": {
+            "tags": "shows-drama"
+          },
+          "8": {
+            "tags": "shows-drama"
+          },
+          "9": {
+            "tags": "shows-drama"
+          }
+        }
+      },
+      "friday": "daily",
+      "monday": "daily",
+      "network_name": "AFTER DARK",
+      "network_type": "standard",
+      "saturday": "daily",
+      "schedule_increment": 60,
+      "standby_image": "runtime/tub3_standby.png",
+      "sunday": "daily",
+      "thursday": "daily",
+      "tub3_order": {
+        "shows-dark": "rotate",
+        "shows-drama": "rotate"
+      },
+      "tuesday": "daily",
+      "wednesday": "daily"
+    }
+  },
+  "11": {
+    "station_conf": {
+      "be_right_back_media": "runtime/tub3_brb.png",
+      "break_duration": 120,
+      "break_strategy": "standard",
+      "bump_dir": "bump-ch11",
+      "channel_number": 11,
+      "commercial_dir": "ads-late",
+      "commercial_free": false,
+      "content_dir": "/private<POOLS>/st11",
+      "day_templates": {
+        "daily": {
+          "0": {
+            "tags": "shows-comedy-late"
+          },
+          "1": {
+            "tags": "shows-comedy-late"
+          },
+          "10": {
+            "tags": "shows-comedy"
+          },
+          "11": {
+            "tags": "shows-comedy"
+          },
+          "12": {
+            "tags": "shows-comedy"
+          },
+          "13": {
+            "tags": "shows-comedy"
+          },
+          "14": {
+            "tags": "shows-comedy"
+          },
+          "15": {
+            "tags": "shows-comedy"
+          },
+          "16": {
+            "tags": "shows-comedy"
+          },
+          "17": {
+            "tags": "shows-comedy"
+          },
+          "18": {
+            "tags": "shows-comedy"
+          },
+          "19": {
+            "tags": "shows-comedy"
+          },
+          "2": {
+            "tags": "shows-comedy-late"
+          },
+          "20": {
+            "tags": "shows-comedy-late"
+          },
+          "21": {
+            "tags": "shows-comedy-late"
+          },
+          "22": {
+            "tags": "shows-comedy-late"
+          },
+          "23": {
+            "tags": "shows-comedy-late"
+          },
+          "3": {
+            "tags": "shows-comedy-late"
+          },
+          "4": {
+            "tags": "shows-comedy-late"
+          },
+          "5": {
+            "tags": "shows-comedy-late"
+          },
+          "6": {
+            "tags": "shows-comedy"
+          },
+          "7": {
+            "tags": "shows-comedy"
+          },
+          "8": {
+            "tags": "shows-comedy"
+          },
+          "9": {
+            "tags": "shows-comedy"
+          }
+        }
+      },
+      "friday": "daily",
+      "monday": "daily",
+      "network_name": "LAST LAUGH",
+      "network_type": "standard",
+      "saturday": "daily",
+      "schedule_increment": 30,
+      "standby_image": "runtime/tub3_standby.png",
+      "sunday": "daily",
+      "thursday": "daily",
+      "tub3_order": {
+        "shows-comedy": "rotate",
+        "shows-comedy-late": "rotate"
+      },
+      "tuesday": "daily",
+      "wednesday": "daily"
+    }
+  },
+  "12": {
+    "station_conf": {
+      "be_right_back_media": "runtime/tub3_brb.png",
+      "break_duration": 120,
+      "break_strategy": "standard",
+      "bump_dir": "bump-ch12",
+      "channel_number": 12,
+      "commercial_dir": "ads-family",
+      "commercial_free": false,
+      "content_dir": "/private<POOLS>/st12",
+      "day_templates": {
+        "daily": {
+          "0": {
+            "tags": "anime-late"
+          },
+          "1": {
+            "tags": "anime-late"
+          },
+          "10": {
+            "tags": "anime-series"
+          },
+          "11": {
+            "tags": "anime-series"
+          },
+          "12": {
+            "tags": "anime-series"
+          },
+          "13": {
+            "tags": "anime-series"
+          },
+          "14": {
+            "tags": "anime-series"
+          },
+          "15": {
+            "tags": "anime-series"
+          },
+          "16": {
+            "tags": "anime-series"
+          },
+          "17": {
+            "tags": "anime-films"
+          },
+          "18": {
+            "tags": "anime-films"
+          },
+          "19": {
+            "tags": "anime-films"
+          },
+          "2": {
+            "tags": "anime-late"
+          },
+          "20": {
+            "tags": "anime-films"
+          },
+          "21": {
+            "tags": "anime-films"
+          },
+          "22": {
+            "tags": "anime-films"
+          },
+          "23": {
+            "tags": "anime-late"
+          },
+          "3": {
+            "tags": "anime-late"
+          },
+          "4": {
+            "tags": "anime-late"
+          },
+          "5": {
+            "tags": "anime-late"
+          },
+          "6": {
+            "tags": "anime-series"
+          },
+          "7": {
+            "tags": "anime-series"
+          },
+          "8": {
+            "tags": "anime-series"
+          },
+          "9": {
+            "tags": "anime-series"
+          }
+        }
+      },
+      "friday": "daily",
+      "monday": "daily",
+      "network_name": "THE ZONE",
+      "network_type": "standard",
+      "saturday": "daily",
+      "schedule_increment": 30,
+      "standby_image": "runtime/tub3_standby.png",
+      "sunday": "daily",
+      "tag_overrides": {
+        "anime-films": {
+          "schedule_increment": 120
+        },
+        "anime-late": {
+          "schedule_increment": 120
+        }
+      },
+      "thursday": "daily",
+      "tub3_order": {
+        "anime-series": "rotate"
+      },
+      "tuesday": "daily",
+      "wednesday": "daily"
+    }
+  },
+  "14": {
+    "station_conf": {
+      "be_right_back_media": "runtime/tub3_brb.png",
+      "break_duration": 120,
+      "break_strategy": "end",
+      "bump_dir": "bump-ch14",
+      "channel_number": 14,
+      "commercial_dir": "ads-ch14",
+      "commercial_free": false,
+      "content_dir": "/private<POOLS>/st14",
+      "day_templates": {
+        "daily": {
+          "0": {
+            "tags": "british-late"
+          },
+          "1": {
+            "tags": "british-late"
+          },
+          "10": {
+            "tags": "british-day"
+          },
+          "11": {
+            "tags": "british-day"
+          },
+          "12": {
+            "tags": "british-day"
+          },
+          "13": {
+            "tags": "british-day"
+          },
+          "14": {
+            "tags": "british-day"
+          },
+          "15": {
+            "tags": "british-day"
+          },
+          "16": {
+            "tags": "british-day"
+          },
+          "17": {
+            "tags": "british-day"
+          },
+          "18": {
+            "tags": "british-day"
+          },
+          "19": {
+            "tags": "british-day"
+          },
+          "2": {
+            "tags": "british-late"
+          },
+          "20": {
+            "tags": "british-late"
+          },
+          "21": {
+            "tags": "british-late"
+          },
+          "22": {
+            "tags": "british-late"
+          },
+          "23": {
+            "tags": "british-late"
+          },
+          "3": {
+            "tags": "british-late"
+          },
+          "4": {
+            "tags": "british-late"
+          },
+          "5": {
+            "tags": "british-late"
+          },
+          "6": {
+            "tags": "british-day"
+          },
+          "7": {
+            "tags": "british-day"
+          },
+          "8": {
+            "tags": "british-day"
+          },
+          "9": {
+            "tags": "british-day"
+          }
+        }
+      },
+      "friday": "daily",
+      "monday": "daily",
+      "network_name": "BBC",
+      "network_type": "standard",
+      "saturday": "daily",
+      "schedule_increment": 5,
+      "standby_image": "runtime/tub3_standby.png",
+      "sunday": "daily",
+      "thursday": "daily",
+      "tub3_order": {
+        "british-day": "rotate",
+        "british-late": "rotate"
+      },
+      "tuesday": "daily",
+      "wednesday": "daily"
+    }
+  },
+  "15": {
+    "station_conf": {
+      "be_right_back_media": "runtime/tub3_brb.png",
+      "break_duration": 120,
+      "break_strategy": "end",
+      "bump_dir": "bump-ch15",
+      "channel_number": 15,
+      "commercial_dir": "ads-ch15",
+      "commercial_free": false,
+      "content_dir": "/private<POOLS>/st15",
+      "day_templates": {
+        "daily": {
+          "0": {
+            "tags": "bbc2-late"
+          },
+          "1": {
+            "tags": "bbc2-late"
+          },
+          "10": {
+            "tags": "bbc2-day"
+          },
+          "11": {
+            "tags": "bbc2-day"
+          },
+          "12": {
+            "tags": "bbc2-day"
+          },
+          "13": {
+            "tags": "bbc2-day"
+          },
+          "14": {
+            "tags": "bbc2-day"
+          },
+          "15": {
+            "tags": "bbc2-day"
+          },
+          "16": {
+            "tags": "bbc2-day"
+          },
+          "17": {
+            "tags": "bbc2-day"
+          },
+          "18": {
+            "tags": "bbc2-day"
+          },
+          "19": {
+            "tags": "bbc2-day"
+          },
+          "2": {
+            "tags": "bbc2-late"
+          },
+          "20": {
+            "tags": "bbc2-late"
+          },
+          "21": {
+            "tags": "bbc2-late"
+          },
+          "22": {
+            "tags": "bbc2-late"
+          },
+          "23": {
+            "tags": "bbc2-late"
+          },
+          "3": {
+            "tags": "bbc2-late"
+          },
+          "4": {
+            "tags": "bbc2-late"
+          },
+          "5": {
+            "tags": "bbc2-late"
+          },
+          "6": {
+            "tags": "bbc2-day"
+          },
+          "7": {
+            "tags": "bbc2-day"
+          },
+          "8": {
+            "tags": "bbc2-day"
+          },
+          "9": {
+            "tags": "bbc2-day"
+          }
+        }
+      },
+      "friday": "daily",
+      "monday": "daily",
+      "network_name": "BBC2",
+      "network_type": "standard",
+      "saturday": "daily",
+      "schedule_increment": 5,
+      "standby_image": "runtime/tub3_standby.png",
+      "sunday": "daily",
+      "thursday": "daily",
+      "tub3_order": {
+        "bbc2-day": "rotate",
+        "bbc2-late": "rotate"
+      },
+      "tuesday": "daily",
+      "wednesday": "daily"
+    }
+  },
+  "16": {
+    "station_conf": {
+      "be_right_back_media": "runtime/tub3_brb.png",
+      "break_duration": 120,
+      "break_strategy": "standard",
+      "bump_dir": "bump-ch16",
+      "channel_number": 16,
+      "commercial_dir": "ads-family",
+      "commercial_free": false,
+      "content_dir": "/private<POOLS>/st16",
+      "day_templates": {
+        "daily": {
+          "0": {
+            "tags": "shows-grime"
+          },
+          "1": {
+            "tags": "shows-grime"
+          },
+          "10": {
+            "tags": "shows-works"
+          },
+          "11": {
+            "tags": "shows-works"
+          },
+          "12": {
+            "tags": "shows-works"
+          },
+          "13": {
+            "tags": "shows-works"
+          },
+          "14": {
+            "tags": "shows-works"
+          },
+          "15": {
+            "tags": "shows-made"
+          },
+          "16": {
+            "tags": "shows-made"
+          },
+          "17": {
+            "tags": "shows-made"
+          },
+          "18": {
+            "tags": "shows-build"
+          },
+          "19": {
+            "tags": "shows-build"
+          },
+          "2": {
+            "tags": "shows-made"
+          },
+          "20": {
+            "tags": "shows-build"
+          },
+          "21": {
+            "tags": "shows-build"
+          },
+          "22": {
+            "tags": "shows-build"
+          },
+          "23": {
+            "tags": "shows-grime"
+          },
+          "3": {
+            "tags": "shows-made"
+          },
+          "4": {
+            "tags": "shows-made"
+          },
+          "5": {
+            "tags": "shows-made"
+          },
+          "6": {
+            "tags": "shows-made"
+          },
+          "7": {
+            "tags": "shows-works"
+          },
+          "8": {
+            "tags": "shows-works"
+          },
+          "9": {
+            "tags": "shows-works"
+          }
+        }
+      },
+      "friday": "daily",
+      "monday": "daily",
+      "network_name": "THE WORKS",
+      "network_type": "standard",
+      "saturday": "daily",
+      "schedule_increment": 30,
+      "standby_image": "runtime/tub3_standby.png",
+      "sunday": "daily",
+      "thursday": "daily",
+      "tub3_order": {
+        "shows-build": "rotate",
+        "shows-grime": "marathon",
+        "shows-made": "marathon",
+        "shows-works": "rotate"
+      },
+      "tuesday": "daily",
+      "wednesday": "daily"
+    }
+  },
+  "17": {
+    "station_conf": {
+      "be_right_back_media": "runtime/tub3_brb.png",
+      "break_duration": 120,
+      "break_strategy": "standard",
+      "bump_dir": "bump-ch17",
+      "channel_number": 17,
+      "commercial_dir": "ads-family",
+      "commercial_free": false,
+      "content_dir": "/private<POOLS>/st17",
+      "day_templates": {
+        "daily": {
+          "0": {
+            "tags": "shows-night"
+          },
+          "1": {
+            "tags": "shows-night"
+          },
+          "10": {
+            "tags": "shows-morning"
+          },
+          "11": {
+            "tags": "shows-morning"
+          },
+          "12": {
+            "tags": "shows-morning"
+          },
+          "13": {
+            "tags": "shows-afternoon"
+          },
+          "14": {
+            "tags": "shows-afternoon"
+          },
+          "15": {
+            "tags": "shows-afternoon"
+          },
+          "16": {
+            "tags": "shows-afternoon"
+          },
+          "17": {
+            "tags": "shows-eats"
+          },
+          "18": {
+            "tags": "shows-eats"
+          },
+          "19": {
+            "tags": "shows-eats"
+          },
+          "2": {
+            "tags": "shows-night"
+          },
+          "20": {
+            "tags": "shows-table"
+          },
+          "21": {
+            "tags": "shows-table"
+          },
+          "22": {
+            "tags": "shows-table"
+          },
+          "23": {
+            "tags": "shows-night"
+          },
+          "3": {
+            "tags": "shows-night"
+          },
+          "4": {
+            "tags": "shows-night"
+          },
+          "5": {
+            "tags": "shows-night"
+          },
+          "6": {
+            "tags": "shows-night"
+          },
+          "7": {
+            "tags": "shows-night"
+          },
+          "8": {
+            "tags": "shows-morning"
+          },
+          "9": {
+            "tags": "shows-morning"
+          }
+        }
+      },
+      "friday": "daily",
+      "monday": "daily",
+      "network_name": "STIFF PEAKS",
+      "network_type": "standard",
+      "saturday": "daily",
+      "schedule_increment": 30,
+      "standby_image": "runtime/tub3_standby.png",
+      "sunday": "daily",
+      "thursday": "daily",
+      "tub3_order": {
+        "shows-afternoon": "marathon",
+        "shows-eats": "marathon",
+        "shows-morning": "marathon",
+        "shows-night": "rotate",
+        "shows-table": "rotate"
+      },
+      "tuesday": "daily",
+      "wednesday": "daily"
+    }
+  },
+  "3": {
+    "station_conf": {
+      "be_right_back_media": "runtime/tub3_brb.png",
+      "break_duration": 120,
+      "break_strategy": "standard",
+      "bump_dir": "bump-ch3",
+      "channel_number": 3,
+      "commercial_dir": "ads-family",
+      "commercial_free": false,
+      "content_dir": "/private<POOLS>/st3",
+      "day_templates": {
+        "daily": {
+          "0": {
+            "tags": "shows-late"
+          },
+          "1": {
+            "tags": "shows-late"
+          },
+          "10": {
+            "tags": "shows-price"
+          },
+          "11": {
+            "tags": "shows-kids"
+          },
+          "12": {
+            "tags": "shows-kids"
+          },
+          "13": {
+            "tags": "shows-kids"
+          },
+          "14": {
+            "tags": "shows-kids"
+          },
+          "15": {
+            "tags": "shows-afterschool"
+          },
+          "16": {
+            "tags": "shows-afterschool"
+          },
+          "17": {
+            "tags": "shows-dinner"
+          },
+          "18": {
+            "tags": "shows-dinner"
+          },
+          "19": {
+            "tags": "shows-dinner"
+          },
+          "2": {
+            "tags": "shows-late"
+          },
+          "20": {
+            "tags": "shows-evening"
+          },
+          "21": {
+            "tags": "shows-evening"
+          },
+          "22": {
+            "tags": "shows-evening"
+          },
+          "23": {
+            "tags": "shows-late"
+          },
+          "3": {
+            "tags": "shows-late"
+          },
+          "4": {
+            "tags": "shows-late"
+          },
+          "5": {
+            "tags": "shows-late"
+          },
+          "6": {
+            "tags": "shows-preschool"
+          },
+          "7": {
+            "tags": "shows-preschool"
+          },
+          "8": {
+            "tags": "shows-preschool"
+          },
+          "9": {
+            "tags": "shows-preschool"
+          }
+        },
+        "saturday": {
+          "0": {
+            "tags": "shows-late"
+          },
+          "1": {
+            "tags": "shows-late"
+          },
+          "10": {
+            "tags": "shows-kids"
+          },
+          "11": {
+            "tags": "shows-kids"
+          },
+          "12": {
+            "tags": "shows-kids"
+          },
+          "13": {
+            "tags": "shows-kids"
+          },
+          "14": {
+            "tags": "shows-kids"
+          },
+          "15": {
+            "tags": "shows-afterschool"
+          },
+          "16": {
+            "tags": "shows-afterschool"
+          },
+          "17": {
+            "tags": "shows-dinner"
+          },
+          "18": {
+            "tags": "shows-dinner"
+          },
+          "19": {
+            "tags": "shows-dinner"
+          },
+          "2": {
+            "tags": "shows-late"
+          },
+          "20": {
+            "tags": "shows-evening"
+          },
+          "21": {
+            "tags": "shows-evening"
+          },
+          "22": {
+            "tags": "shows-evening"
+          },
+          "23": {
+            "tags": "shows-late"
+          },
+          "3": {
+            "tags": "shows-late"
+          },
+          "4": {
+            "tags": "shows-late"
+          },
+          "5": {
+            "tags": "shows-late"
+          },
+          "6": {
+            "tags": "shows-preschool"
+          },
+          "7": {
+            "tags": "shows-preschool"
+          },
+          "8": {
+            "tags": "shows-preschool"
+          },
+          "9": {
+            "tags": "shows-preschool"
+          }
+        }
+      },
+      "friday": "daily",
+      "monday": "daily",
+      "network_name": "BOOBTUBE",
+      "network_type": "standard",
+      "saturday": "saturday",
+      "schedule_increment": 30,
+      "standby_image": "runtime/tub3_standby.png",
+      "sunday": "saturday",
+      "tag_overrides": {
+        "shows-price": {
+          "schedule_increment": 60
+        }
+      },
+      "thursday": "daily",
+      "tub3_order": {
+        "shows-afterschool": "rotate",
+        "shows-dinner": "rotate",
+        "shows-evening": "rotate",
+        "shows-kids": "rotate",
+        "shows-late": "rotate",
+        "shows-preschool": "rotate",
+        "shows-price": "rotate"
+      },
+      "tuesday": "daily",
+      "wednesday": "daily"
+    }
+  },
+  "4": {
+    "station_conf": {
+      "be_right_back_media": "runtime/tub3_brb.png",
+      "break_duration": 120,
+      "break_strategy": "standard",
+      "bump_dir": "bump-ch4",
+      "channel_number": 4,
+      "commercial_dir": "ads-kids",
+      "commercial_free": false,
+      "content_dir": "/private<POOLS>/st4",
+      "day_templates": {
+        "daily": {
+          "0": {
+            "tags": "shows-sat"
+          },
+          "1": {
+            "tags": "shows-sat"
+          },
+          "10": {
+            "tags": "shows-sat"
+          },
+          "11": {
+            "tags": "shows-sat"
+          },
+          "12": {
+            "tags": "shows-sat"
+          },
+          "13": {
+            "tags": "shows-sat"
+          },
+          "14": {
+            "tags": "shows-sat"
+          },
+          "15": {
+            "tags": "shows-sat"
+          },
+          "16": {
+            "tags": "shows-sat"
+          },
+          "17": {
+            "tags": "shows-sat"
+          },
+          "18": {
+            "tags": "shows-sat"
+          },
+          "19": {
+            "tags": "shows-sat"
+          },
+          "2": {
+            "tags": "shows-sat"
+          },
+          "20": {
+            "tags": "shows-sat"
+          },
+          "21": {
+            "tags": "shows-sat"
+          },
+          "22": {
+            "tags": "shows-sat"
+          },
+          "23": {
+            "tags": "shows-sat"
+          },
+          "3": {
+            "tags": "shows-sat"
+          },
+          "4": {
+            "tags": "shows-sat"
+          },
+          "5": {
+            "tags": "shows-sat"
+          },
+          "6": {
+            "tags": "shows-sat"
+          },
+          "7": {
+            "tags": "shows-sat"
+          },
+          "8": {
+            "tags": "shows-sat"
+          },
+          "9": {
+            "tags": "shows-sat"
+          }
+        }
+      },
+      "friday": "daily",
+      "monday": "daily",
+      "network_name": "SATURDAY AM",
+      "network_type": "standard",
+      "saturday": "daily",
+      "schedule_increment": 30,
+      "standby_image": "runtime/tub3_standby.png",
+      "sunday": "daily",
+      "thursday": "daily",
+      "tub3_order": {
+        "shows-sat": "rotate"
+      },
+      "tuesday": "daily",
+      "wednesday": "daily"
+    }
+  },
+  "5": {
+    "station_conf": {
+      "be_right_back_media": "runtime/tub3_brb.png",
+      "break_duration": 120,
+      "break_strategy": "end",
+      "bump_dir": "bump-ch5",
+      "channel_number": 5,
+      "commercial_free": true,
+      "content_dir": "/private<POOLS>/st5",
+      "day_templates": {
+        "daily": {
+          "0": {
+            "tags": "shows-pbs"
+          },
+          "1": {
+            "tags": "shows-pbs"
+          },
+          "10": {
+            "tags": "shows-pbs"
+          },
+          "11": {
+            "tags": "shows-pbs"
+          },
+          "12": {
+            "tags": "shows-pbs"
+          },
+          "13": {
+            "tags": "shows-pbs"
+          },
+          "14": {
+            "tags": "shows-pbs"
+          },
+          "15": {
+            "tags": "shows-pbs"
+          },
+          "16": {
+            "tags": "shows-pbs"
+          },
+          "17": {
+            "tags": "shows-pbs"
+          },
+          "18": {
+            "tags": "shows-pbs"
+          },
+          "19": {
+            "tags": "shows-pbs"
+          },
+          "2": {
+            "tags": "shows-pbs"
+          },
+          "20": {
+            "tags": "shows-pbs"
+          },
+          "21": {
+            "tags": "shows-pbs"
+          },
+          "22": {
+            "tags": "shows-pbs"
+          },
+          "23": {
+            "tags": "shows-pbs"
+          },
+          "3": {
+            "tags": "shows-pbs"
+          },
+          "4": {
+            "tags": "shows-pbs"
+          },
+          "5": {
+            "tags": "shows-pbs"
+          },
+          "6": {
+            "tags": "shows-pbs"
+          },
+          "7": {
+            "tags": "shows-pbs"
+          },
+          "8": {
+            "tags": "shows-pbs"
+          },
+          "9": {
+            "tags": "shows-pbs"
+          }
+        }
+      },
+      "friday": "daily",
+      "monday": "daily",
+      "network_name": "SUNNY DAYS",
+      "network_type": "standard",
+      "saturday": "daily",
+      "schedule_increment": 30,
+      "standby_image": "runtime/tub3_standby.png",
+      "sunday": "daily",
+      "thursday": "daily",
+      "tub3_order": {
+        "shows-pbs": "rotate"
+      },
+      "tuesday": "daily",
+      "wednesday": "daily"
+    }
+  },
+  "6": {
+    "station_conf": {
+      "be_right_back_media": "runtime/tub3_brb.png",
+      "break_duration": 120,
+      "break_strategy": "standard",
+      "bump_dir": "bump-ch6",
+      "channel_number": 6,
+      "commercial_dir": "ads-late",
+      "commercial_free": false,
+      "content_dir": "/private<POOLS>/st6",
+      "day_templates": {
+        "daily": {
+          "0": {
+            "tags": "films"
+          },
+          "1": {
+            "tags": "films"
+          },
+          "10": {
+            "tags": "films"
+          },
+          "11": {
+            "tags": "films"
+          },
+          "12": {
+            "tags": "films"
+          },
+          "13": {
+            "tags": "films"
+          },
+          "14": {
+            "tags": "films"
+          },
+          "15": {
+            "tags": "films"
+          },
+          "16": {
+            "tags": "films"
+          },
+          "17": {
+            "tags": "films"
+          },
+          "18": {
+            "tags": "films"
+          },
+          "19": {
+            "tags": "films"
+          },
+          "2": {
+            "tags": "films"
+          },
+          "20": {
+            "tags": "films"
+          },
+          "21": {
+            "tags": "films"
+          },
+          "22": {
+            "tags": "films"
+          },
+          "23": {
+            "tags": "films"
+          },
+          "3": {
+            "tags": "films"
+          },
+          "4": {
+            "tags": "films"
+          },
+          "5": {
+            "tags": "films"
+          },
+          "6": {
+            "tags": "films"
+          },
+          "7": {
+            "tags": "films"
+          },
+          "8": {
+            "tags": "films"
+          },
+          "9": {
+            "tags": "films"
+          }
+        }
+      },
+      "friday": "daily",
+      "monday": "daily",
+      "network_name": "THE PICTURES",
+      "network_type": "standard",
+      "saturday": "daily",
+      "schedule_increment": 120,
+      "standby_image": "runtime/tub3_standby.png",
+      "sunday": "daily",
+      "thursday": "daily",
+      "tuesday": "daily",
+      "wednesday": "daily"
+    }
+  },
+  "7": {
+    "station_conf": {
+      "be_right_back_media": "runtime/tub3_brb.png",
+      "break_duration": 120,
+      "break_strategy": "standard",
+      "bump_dir": "bump-ch7",
+      "channel_number": 7,
+      "commercial_dir": "ads-kids",
+      "commercial_free": false,
+      "content_dir": "/private<POOLS>/st7",
+      "day_templates": {
+        "daily": {
+          "0": {
+            "tags": "films-kids"
+          },
+          "1": {
+            "tags": "films-kids"
+          },
+          "10": {
+            "tags": "films-kids"
+          },
+          "11": {
+            "tags": "films-kids"
+          },
+          "12": {
+            "tags": "films-kids"
+          },
+          "13": {
+            "tags": "films-kids"
+          },
+          "14": {
+            "tags": "films-kids"
+          },
+          "15": {
+            "tags": "films-kids"
+          },
+          "16": {
+            "tags": "films-kids"
+          },
+          "17": {
+            "tags": "films-kids"
+          },
+          "18": {
+            "tags": "films-kids"
+          },
+          "19": {
+            "tags": "films-kids"
+          },
+          "2": {
+            "tags": "films-kids"
+          },
+          "20": {
+            "tags": "films-kids"
+          },
+          "21": {
+            "tags": "films-kids"
+          },
+          "22": {
+            "tags": "films-kids"
+          },
+          "23": {
+            "tags": "films-kids"
+          },
+          "3": {
+            "tags": "films-kids"
+          },
+          "4": {
+            "tags": "films-kids"
+          },
+          "5": {
+            "tags": "films-kids"
+          },
+          "6": {
+            "tags": "films-kids"
+          },
+          "7": {
+            "tags": "films-kids"
+          },
+          "8": {
+            "tags": "films-kids"
+          },
+          "9": {
+            "tags": "films-kids"
+          }
+        }
+      },
+      "friday": "daily",
+      "monday": "daily",
+      "network_name": "MATINEE",
+      "network_type": "standard",
+      "saturday": "daily",
+      "schedule_increment": 120,
+      "standby_image": "runtime/tub3_standby.png",
+      "sunday": "daily",
+      "thursday": "daily",
+      "tuesday": "daily",
+      "wednesday": "daily"
+    }
+  },
+  "8": {
+    "station_conf": {
+      "be_right_back_media": "runtime/tub3_brb.png",
+      "break_duration": 120,
+      "break_strategy": "end",
+      "bump_dir": "bump-ch8",
+      "channel_number": 8,
+      "commercial_dir": "ads-late",
+      "commercial_free": false,
+      "content_dir": "/private<POOLS>/st8",
+      "day_templates": {
+        "daily": {
+          "0": {
+            "tags": "shows-life-late"
+          },
+          "1": {
+            "tags": "shows-life-late"
+          },
+          "10": {
+            "tags": "shows-life"
+          },
+          "11": {
+            "tags": "shows-life"
+          },
+          "12": {
+            "tags": "shows-life"
+          },
+          "13": {
+            "tags": "shows-life"
+          },
+          "14": {
+            "tags": "shows-life"
+          },
+          "15": {
+            "tags": "shows-life"
+          },
+          "16": {
+            "tags": "shows-life"
+          },
+          "17": {
+            "tags": "shows-life"
+          },
+          "18": {
+            "tags": "shows-life"
+          },
+          "19": {
+            "tags": "shows-life"
+          },
+          "2": {
+            "tags": "shows-life-late"
+          },
+          "20": {
+            "tags": "shows-life-late"
+          },
+          "21": {
+            "tags": "shows-life-late"
+          },
+          "22": {
+            "tags": "shows-life-late"
+          },
+          "23": {
+            "tags": "shows-life-late"
+          },
+          "3": {
+            "tags": "shows-life-late"
+          },
+          "4": {
+            "tags": "shows-life-late"
+          },
+          "5": {
+            "tags": "shows-life-late"
+          },
+          "6": {
+            "tags": "shows-life"
+          },
+          "7": {
+            "tags": "shows-life"
+          },
+          "8": {
+            "tags": "shows-life"
+          },
+          "9": {
+            "tags": "shows-life"
+          }
+        }
+      },
+      "friday": "daily",
+      "monday": "daily",
+      "network_name": "THE GOOD LIFE",
+      "network_type": "standard",
+      "saturday": "daily",
+      "schedule_increment": 5,
+      "standby_image": "runtime/tub3_standby.png",
+      "sunday": "daily",
+      "thursday": "daily",
+      "tub3_order": {
+        "shows-life": "rotate",
+        "shows-life-late": "rotate"
+      },
+      "tuesday": "daily",
+      "wednesday": "daily"
+    }
+  },
+  "9": {
+    "station_conf": {
+      "be_right_back_media": "runtime/tub3_brb.png",
+      "break_duration": 120,
+      "break_strategy": "end",
+      "bump_dir": "bump-ch9",
+      "channel_number": 9,
+      "commercial_dir": "ads-late",
+      "commercial_free": false,
+      "content_dir": "/private<POOLS>/st9",
+      "day_templates": {
+        "daily": {
+          "0": {
+            "tags": "shows-travel"
+          },
+          "1": {
+            "tags": "shows-travel"
+          },
+          "10": {
+            "tags": "shows-travel"
+          },
+          "11": {
+            "tags": "shows-travel"
+          },
+          "12": {
+            "tags": "shows-travel"
+          },
+          "13": {
+            "tags": "shows-travel"
+          },
+          "14": {
+            "tags": "shows-travel"
+          },
+          "15": {
+            "tags": "shows-travel"
+          },
+          "16": {
+            "tags": "shows-travel"
+          },
+          "17": {
+            "tags": "shows-travel"
+          },
+          "18": {
+            "tags": "shows-travel"
+          },
+          "19": {
+            "tags": "shows-travel"
+          },
+          "2": {
+            "tags": "shows-travel"
+          },
+          "20": {
+            "tags": "shows-travel"
+          },
+          "21": {
+            "tags": "shows-travel"
+          },
+          "22": {
+            "tags": "shows-travel"
+          },
+          "23": {
+            "tags": "shows-travel"
+          },
+          "3": {
+            "tags": "shows-travel"
+          },
+          "4": {
+            "tags": "shows-travel"
+          },
+          "5": {
+            "tags": "shows-travel"
+          },
+          "6": {
+            "tags": "shows-travel"
+          },
+          "7": {
+            "tags": "shows-travel"
+          },
+          "8": {
+            "tags": "shows-travel"
+          },
+          "9": {
+            "tags": "shows-travel"
+          }
+        }
+      },
+      "friday": "daily",
+      "monday": "daily",
+      "network_name": "FAR AFIELD",
+      "network_type": "standard",
+      "saturday": "daily",
+      "schedule_increment": 5,
+      "standby_image": "runtime/tub3_standby.png",
+      "sunday": "daily",
+      "thursday": "daily",
+      "tub3_order": {
+        "shows-travel": "rotate"
+      },
+      "tuesday": "daily",
+      "wednesday": "daily"
+    }
+  }
+}
