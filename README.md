@@ -175,10 +175,23 @@ whole month plays anyway. A wrong hour is a blemish; an empty channel is a fault
 ### 4. Check it before it writes anything
 
 ```bash
-python3 -m tub3.lineup lineup.json \
-    --media-root /mnt/tub3/Media --ads /mnt/tub3/Media/Commercials \
+.venv-build/bin/python -m tub3.lineup lineup.json \
+    --media-root ~/8008tub3/media --ads /mnt/tub3/Media/mshare/Commercials \
     --bumpers ~/8008tub3/bumpers --dry-run
 ```
+
+Three details in that command, each of which used to be wrong here and each of which fails
+in its own way:
+
+- **`.venv-build/bin/python`, not `python3`.** The dry run works under either, so the system
+  interpreter looks fine right up until you drop `--dry-run` — and then it walks the whole
+  library, writes the pools, and dies on `import PIL` while drawing the ident cards for the
+  new channel. `tub3/web.py` carries the same warning about `sys.executable` for the same
+  reason.
+- **`--media-root ~/8008tub3/media`**, which is where the tag pools live. It is not the media
+  share: that is mounted read-only on the box on purpose, so pointing this at
+  `/mnt/tub3/Media` cannot write a pool at all.
+- **`--ads /mnt/tub3/Media/mshare/Commercials`.** The rating folders are under `mshare`.
 
 The audit prints two lists: **REFUSED**, things that make the lineup unsafe to apply, and
 **VETTED**, content allowed into children's hours by explicit override. `apply` raises on the
@@ -190,9 +203,16 @@ Drop `--dry-run` to write the station configs.
 ### 5. Build the schedule and watch
 
 ```bash
-.venv-build/bin/python -m tub3.supervisor --force
+.venv-build/bin/python -m tub3.durations
+.venv-build/bin/python -m tub3.supervisor
 sudo systemctl restart tub3-tuner
 ```
+
+**Do not pass `--force` when you are adding a channel.** A new station has no blocks, so it
+reports zero hours left and lands in `stale` by itself — the plain run builds exactly the new
+channels and leaves the rest alone. `--force` rebuilds all of them, and since `schedules.py`
+calls `_clear_blocks` before generating, it takes every existing channel dark for the length
+of the run. `--force` is for when a schedule is wrong, not for when one is missing.
 
 Building is slow — expect roughly a minute per channel over a network mount, because every
 candidate file gets `realpath` and `stat` regardless of what else is cached. Run it once by
