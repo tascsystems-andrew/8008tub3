@@ -60,10 +60,19 @@ say "Sending source"
 # it plays, mounted at paths that exist on the Pi and nowhere else. Shipping the Mac's copy
 # overwrote it on every deploy, silently replacing the Pi's library with /Volumes paths
 # that cannot resolve there. A deploy pushes code; it must not push state.
+#
+# lineup.json is state by the same rule and was NOT excluded, which is worse than the
+# settings.json case was. It is the dial: fifteen channels, their sources, their dayparts and
+# their watershed exemptions. A deploy pushed the Mac's copy over the box's, and because
+# lineup.json is on line 17 of .gitignore there is no version history to recover from and
+# this script's own uncommitted-changes warning is structurally unable to mention it. It has
+# cost nothing so far only because both copies happen to be byte-identical — the moment
+# anything edits the dial on the box, a deploy destroys it silently.
 COPYFILE_DISABLE=1 tar --no-xattrs \
     --exclude='./vendor' --exclude='./.venv' --exclude='./.venv-build' \
     --exclude='./__pycache__' --exclude='*.pyc' --exclude='./runtime' \
     --exclude='./settings.json' --exclude='./plex.json' --exclude='./media' \
+    --exclude='./lineup.json' \
     -cf - . | ssh "$HOST" "mkdir -p ~/$DEST && tar -xf - -C ~/$DEST"
 
 SENT="$(ssh "$HOST" "find ~/$DEST -type f ! -path '*/.git/*' | wc -l" | tr -d ' ')"
