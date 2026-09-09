@@ -146,19 +146,24 @@ class Verify(unittest.TestCase):
 
 
 class FolderOf(unittest.TestCase):
+    """The roots must be passed. Without them a library root looks like an ordinary folder,
+    which is precisely the fault that let twelve films claim one."""
+
+    ROOTS = {"/m/TV", "/m/Movies", "/m/Kids Movies"}
 
     def test_a_series_is_its_folder(self):
         self.assertEqual(
-            lib._folder_of(["/m/TV/Show/Season 1/a.mkv", "/m/TV/Show/Season 2/b.mkv"]),
+            lib._folder_of(["/m/TV/Show/Season 1/a.mkv", "/m/TV/Show/Season 2/b.mkv"],
+                           self.ROOTS),
             "/m/TV/Show")
 
-    def test_a_film_loose_in_a_library_root_keeps_its_own_file(self):
-        """Naming the root would sweep in every other film in the library."""
-        self.assertEqual(lib._folder_of(["/m/Movies/Jaws (1975).mkv"]),
+    def test_a_single_film_loose_in_a_library_root_keeps_its_own_file(self):
+        """One file has no ambiguity: name the file, never the library around it."""
+        self.assertEqual(lib._folder_of(["/m/Movies/Jaws (1975).mkv"], self.ROOTS),
                          "/m/Movies/Jaws (1975).mkv")
 
     def test_a_film_in_its_own_folder_names_the_folder(self):
-        self.assertEqual(lib._folder_of(["/m/Movies/Jaws (1975)/jaws.mkv"]),
+        self.assertEqual(lib._folder_of(["/m/Movies/Jaws (1975)/jaws.mkv"], self.ROOTS),
                          "/m/Movies/Jaws (1975)")
 
 
