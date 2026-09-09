@@ -15,6 +15,11 @@ guide-music/
 *.log
 .DS_Store
 lineup.json
+# ...but not the test fixture. The line above is a bare filename, so it matches at any depth,
+# and it silently swallowed tests/fixtures/lineup.json — a test that passes here and fails on
+# a fresh clone, for a file nothing warns you about. The real dial stays out of git because it
+# carries the household's media paths; the fixture has had them stripped and must be in.
+!tests/fixtures/lineup.json
 
 # A leftover render artifact from the standby card, with a LAN address baked in.
 frame.ass
