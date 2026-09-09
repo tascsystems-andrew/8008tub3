@@ -102,7 +102,7 @@ def verify(paths: list[str], want: int = 5) -> list[str]:
 
 def build(*, verbose: bool = False) -> dict:
     """Walk every programme section and write the catalogue."""
-    from .plex import from_config
+    from .plex import fill_show_paths, from_config
 
     client = from_config()
     if client is None:
@@ -128,9 +128,19 @@ def build(*, verbose: bool = False) -> dict:
             f"plex says {roots}, the box says {local_dirs}"
         )
 
+    local_roots = {localise(r, prefix) for r in roots}
+
     titles: list[dict] = []
     for section in sections:
-        for item in client.items(section["key"], section["title"] or ""):
+        items = client.items(section["key"], section["title"] or "")
+        # A series' own element carries no <Location> on this server — `fill_show_paths` says
+        # so at length, because the audit was silently running without Plex for every
+        # television channel until somebody noticed. This module reintroduced the same fault
+        # by not calling it: 132 of 1003 titles had no path, being every series in both TV
+        # sections, which is the half the channels are actually made of.
+        if section["type"] == "show":
+            fill_show_paths(client, items)
+        for item in items:
             # The section listing truncates each title's genre list, so the full one costs a
             # request per title. Sixteen seconds for the whole library, once, against a
             # channel definition that would otherwise be built on two genres out of five.
@@ -149,13 +159,26 @@ def build(*, verbose: bool = False) -> dict:
                 "seconds": item.seconds,
                 "rating_key": item.rating_key,
                 # The folder a lineup would name: the common head of everything under it.
-                "path": _folder_of(local),
+                "path": _folder_of(local, local_roots),
+                # The files themselves, always. A multi-version film sitting loose in a
+                # library root has no folder of its own, and naming the root would hand a
+                # channel every other film in the library.
+                "paths": sorted(local),
                 "files": len(local),
             })
         if verbose:
             print(f"  {section['title']}: {len([t for t in titles if t['section'] == section['title']])}")
 
-    missing = verify([t["path"] for t in titles if t["path"]])
+    # Every title must have somewhere to play from. Filtering the empty ones out before
+    # checking — which this did — grades only the rows that already passed, and reported
+    # "zero paths do not resolve" while 132 titles had no path at all.
+    pathless = [t["title"] for t in titles if not t["path"] and not t["paths"]]
+    if pathless:
+        raise RuntimeError(
+            f"{len(pathless)} of {len(titles)} titles have no path at all — "
+            + ", ".join(pathless[:3]) + ("…" if len(pathless) > 3 else "")
+        )
+    missing = verify([t["path"] or (t["paths"][0] if t["paths"] else "") for t in titles])
     if missing:
         raise RuntimeError(
             "the derived Plex-to-box path prefix does not resolve: "
@@ -188,25 +211,38 @@ def _genres(client, rating_key: str) -> list[str]:
     return [g.get("tag") for g in node.findall("Genre") if g.get("tag")]
 
 
-def _folder_of(paths: list[str]) -> str:
-    """The directory a lineup would name for this title.
+def _folder_of(paths: list[str], roots: set[str] | None = None) -> str:
+    """The directory a lineup would name for this title, or "" when there is not one.
 
-    A series is its folder. A film is very often a bare file in the library root, and naming
-    the root would sweep in every other film — so a film with no folder of its own keeps its
-    file path, which `_iter_videos` already accepts.
+    A series is its folder. A film is very often loose in the library root — sometimes twice,
+    in two versions — and the common parent of those files is the root itself. Returning it
+    would hand a channel every other film in the library: twelve titles did exactly that,
+    which is how `/mnt/tub3/Media/mshare/Kids Movies` came to mean "Alice in Wonderland".
+
+    So a library root is never an answer. A single file keeps its own path, which
+    `_iter_videos` accepts; several files with nothing between them and the root get "", and
+    the caller uses `paths` instead.
     """
+    roots = {r.rstrip("/") for r in (roots or set())}
+    # A library root sometimes appears in a title's own path list beside its real folder —
+    # `fill_show_paths` derives a series folder from its episodes and the section's Location
+    # can come along too, so Arthur arrives as ["…/Kids TV", "…/Kids TV/Arthur"]. Taking the
+    # common head of that pair gives the root, and refusing the root then gives nothing, so
+    # fifty series had no folder while their folder sat in the list. Drop the roots first.
+    paths = [p for p in paths if p.rstrip("/") not in roots] or paths
     if not paths:
         return ""
     if len(paths) == 1:
-        parent = str(Path(paths[0]).parent)
-        return paths[0] if Path(parent).name.lower() in ("movies", "kids movies") else parent
+        parent = str(Path(paths[0]).parent).rstrip("/")
+        return paths[0] if parent in roots else parent
     parts = [p.split("/") for p in paths]
     out: list[str] = []
     for column in zip(*parts):
         if len(set(column)) != 1:
             break
         out.append(column[0])
-    return "/".join(out)
+    common = "/".join(out).rstrip("/")
+    return "" if not common or common in roots else common
 
 
 def load() -> dict:

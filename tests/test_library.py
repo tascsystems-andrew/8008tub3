@@ -65,6 +65,55 @@ class DerivePrefix(unittest.TestCase):
             ["/Media/TV", "/other/Movies"], ["/mnt/a/TV", "/mnt/b/Movies"]))
 
 
+class FolderOfRegressions(unittest.TestCase):
+    """The three faults that shipped in the first catalogue, each pinned.
+
+    All three passed a build and a verification. That is the point: none of them raised, and
+    the check that should have caught the first one filtered it out before looking.
+    """
+
+    ROOTS = {"/m/TV", "/m/Kids TV", "/m/Movies", "/m/Kids Movies"}
+
+    def test_a_root_beside_the_real_folder_does_not_win(self):
+        """`fill_show_paths` hands back both, and the common head of the pair is the root.
+
+        Fifty series had no folder while their folder was sitting in the list next to it.
+        """
+        self.assertEqual(
+            lib._folder_of(["/m/Kids TV", "/m/Kids TV/Arthur"], self.ROOTS),
+            "/m/Kids TV/Arthur")
+
+    def test_a_multi_version_film_never_claims_the_library(self):
+        """Two versions loose in a root have the root as their common parent.
+
+        Twelve titles returned it, which is how `/m/Kids Movies` came to mean
+        "Alice in Wonderland" — and a channel drawing that source would have played the
+        entire children's film library.
+        """
+        self.assertEqual(
+            lib._folder_of(["/m/Kids Movies/Alice in Wonderland.mkv",
+                            "/m/Kids Movies/Alice in Wonderland 2010.mkv"], self.ROOTS),
+            "")
+
+    def test_a_series_spanning_two_folders_returns_nothing_rather_than_guessing(self):
+        """Plex folded `Survivorman and Son` into `Survivorman`, so it spans both.
+
+        There is no one folder to name, and naming the library would be far worse than
+        admitting it. The caller uses `paths`.
+        """
+        self.assertEqual(
+            lib._folder_of(["/m/TV/Survivorman",
+                            "/m/TV/Survivorman and Son",
+                            "/m/TV/Survivorman and Son/Season 1"], self.ROOTS),
+            "")
+
+    def test_an_ordinary_series_is_still_its_folder(self):
+        self.assertEqual(
+            lib._folder_of(["/m/TV/Cheers/Season 1/a.mkv",
+                            "/m/TV/Cheers/Season 2/b.mkv"], self.ROOTS),
+            "/m/TV/Cheers")
+
+
 class Localise(unittest.TestCase):
 
     def test_substitutes_only_the_head(self):
