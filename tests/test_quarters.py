@@ -23,6 +23,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tub3.lineup import (                                        # noqa: E402
     QUARTERS_PER_DAY, Channel, Daypart, _collapse, _day_template, parse_span)
 
+FIXTURE = Path(__file__).resolve().parent / "fixtures" / "lineup.json"
+
 
 class ParseSpan(unittest.TestCase):
     def test_the_form_every_channel_is_written_in(self):
@@ -59,47 +61,19 @@ class Quarters(unittest.TestCase):
     def test_a_plain_range(self):
         part = Daypart(*parse_span("6-10"), "x")
         self.assertEqual(part.quarters(), list(range(24, 40)))
-        self.assertEqual(part.hours(), [6, 7, 8, 9])
 
     def test_wrapping_past_midnight(self):
         part = Daypart(*parse_span("23-6"), "x")
         self.assertEqual(part.quarters()[:4], [92, 93, 94, 95])
         self.assertEqual(part.quarters()[4:8], [0, 1, 2, 3])
-        self.assertEqual(part.hours(), [23, 0, 1, 2, 3, 4, 5])
+        self.assertEqual(len(part.quarters()), 7 * 4)
 
     def test_a_span_that_ends_where_it_starts_is_the_whole_day(self):
         # Long-standing behaviour of the hour arithmetic this replaces; nothing on the dial
         # uses it, and changing it silently would be a change nobody asked for.
         part = Daypart(*parse_span("6-6"), "x")
         self.assertEqual(len(part.quarters()), QUARTERS_PER_DAY)
-        self.assertEqual(part.hours(), list(range(6, 24)) + list(range(0, 6)))
-
-    def test_hours_rounds_outward(self):
-        # The sliver that must not disappear. 19:45-20:00 is before the watershed.
-        self.assertEqual(Daypart(*parse_span("19:45-20:00"), "x").hours(), [19])
-        self.assertEqual(Daypart(*parse_span("17:00-20:30"), "x").hours(),
-                         [17, 18, 19, 20])
-        self.assertEqual(Daypart(*parse_span("20:30-23:00"), "x").hours(),
-                         [20, 21, 22])
-
-    def test_hours_matches_the_arithmetic_it_replaces(self):
-        # Every daypart on the dial is hour-aligned, so for all of them the derived version
-        # has to agree with the old `range(start, end)` exactly — order included.
-        for start in range(24):
-            for end in range(24):
-                old = (list(range(start, end)) if end > start
-                       else list(range(start, 24)) + list(range(0, end)))
-                new = Daypart(*parse_span(f"{start}-{end}"), "x").hours()
-                self.assertEqual(new, old, f"{start}-{end}")
-
-    def test_span_and_hours_text(self):
-        aligned = Daypart(*parse_span("6-10"), "x")
-        self.assertEqual(aligned.span(), "06:00-10:00")
-        # Compact when it can be, so a file written back reads the way it was written.
-        self.assertEqual(aligned.hours_text(), "6-10")
-        odd = Daypart(*parse_span("17:00-20:30"), "x")
-        self.assertEqual(odd.span(), "17:00-20:30")
-        self.assertEqual(odd.hours_text(), "17:00-20:30")
+        self.assertEqual(part.quarters()[0], 24)
 
     def test_span_matches_the_printer_it_replaces(self):
         # `main`'s listing used to format `f"{start:02d}:00-{end:02d}:00"` straight off the
@@ -276,12 +250,11 @@ class WeekGridDrawsWhatIsScheduled(unittest.TestCase):
 class TheSliverReachesTheGuard(unittest.TestCase):
     """The reason `hours()` rounds outward, stated as a test.
 
-    `audit()` still reasons in whole hours — moving it to quarters is a later step — so the
-    only thing carrying a sub-hour daypart into the children's-hours check is the rounding
-    direction of `hours()`. Round inward and a daypart starting at 16:45 reports hours
-    17, 18, 19: the fifteen minutes before the watershed on a family channel simply are not
-    there, no `problems`, no `unjudged`, nothing printed. Round outward and hour 16 is in the
-    set and the guard fires.
+    `audit()` reads the compiled quarter grid, so a daypart starting at 16:45 puts its tag in
+    the children's window at quarter 67 and the guard fires. Anything that judged a daypart
+    by whole hours instead — and an earlier version of this did — would have to choose a
+    rounding direction, and the inward choice makes the fifteen minutes before the watershed
+    on a family channel simply not exist: no `problems`, no `unjudged`, nothing printed.
 
     Nothing on the dial can express this yet. That is exactly why it is pinned here — the
     golden files cannot see it, because every daypart today is hour-aligned and both
@@ -311,7 +284,322 @@ class TheSliverReachesTheGuard(unittest.TestCase):
         self.assertTrue(hit, "a 16:45 start put adult content in children's hours unnoticed")
         self.assertIn("shows-dinner", hit[0])
 
-    def test_and_the_hour_list_is_what_carries_it(self):
+    def test_and_the_quarters_are_what_carry_it(self):
         late = Daypart(*parse_span("16:45-20"), "shows-dinner")
-        self.assertIn(16, late.hours())
-        self.assertEqual(late.hours(), [16, 17, 18, 19])
+        from tub3.lineup import in_childrens_hours_q
+        # 16:45 is quarter 67, the last one inside the children's window.
+        self.assertIn(67, late.quarters())
+        self.assertTrue(in_childrens_hours_q(67))
+        self.assertFalse(any(in_childrens_hours_q(q) for q in late.quarters() if q > 67))
+
+
+class Lattice(unittest.TestCase):
+    """The finest boundary a channel can land on — a floor, never a promise.
+
+    A block's length is `increment * ceil(content / increment)` and the next slot lookup
+    happens wherever that lands, so a minute that does not divide into every increment on the
+    channel can never be a mark, whatever the content. That much the editor can refuse
+    outright. Whether a divisible edge *does* get a mark depends on the durations leading up
+    to it, and nothing here promises it.
+    """
+
+    def fixture(self):
+        from tub3.lineup import load
+        return {c.number: c for c in load(FIXTURE)}
+
+    def test_the_real_dial(self):
+        from tub3.lineup import lattice
+        dial = self.fixture()
+        # Channel 3 runs half-hours with one 60-minute daypart for The Price Is Right, so a
+        # boundary at :30 is reachable and :15 is not.
+        self.assertEqual(lattice(dial[3]), 30)
+        # THE PICTURES and MATINEE run two-hour films: the finest edge is an even hour.
+        self.assertEqual(lattice(dial[6]), 120)
+        self.assertEqual(lattice(dial[7]), 120)
+        # THE GOOD LIFE runs five-minute increments, so the quarter grid is entirely reachable.
+        self.assertEqual(lattice(dial[8]), 5)
+        # AFTER DARK is hourly.
+        self.assertEqual(lattice(dial[10]), 60)
+        # THE ZONE mixes 30 with two 120-minute film dayparts; the gcd is what binds.
+        self.assertEqual(lattice(dial[12]), 30)
+
+    def test_a_channel_that_names_no_increment_takes_the_default(self):
+        from tub3.lineup import DEFAULT_INCREMENT, Channel, lattice
+        self.assertEqual(lattice(Channel(number=99, name="T")), DEFAULT_INCREMENT)
+
+    def test_a_per_daypart_increment_can_only_make_it_finer(self):
+        from tub3.lineup import Channel, Daypart, lattice, parse_span
+        coarse = Channel(number=99, name="T", increment=60,
+                         dayparts=[Daypart(*parse_span("6-10"), "a")])
+        self.assertEqual(lattice(coarse), 60)
+        mixed = Channel(number=99, name="T", increment=60,
+                        dayparts=[Daypart(*parse_span("6-10"), "a"),
+                                  Daypart(*parse_span("10-12"), "b", increment=45)])
+        self.assertEqual(lattice(mixed), 15)
+
+
+class Spans(unittest.TestCase):
+    """A refusal names the times that actually caused it.
+
+    The hull this replaces was `min(hours)`..`max(hours) + 1` over the union of every
+    daypart sharing a tag, so a tag used twice in a day was reported as one long block.
+    """
+
+    def test_one_run(self):
+        from tub3.lineup import _spans, parse_span, Daypart
+        self.assertEqual(_spans(set(Daypart(*parse_span("6-10"), "x").quarters())),
+                         "06:00-10:00")
+
+    def test_two_runs_are_not_merged_into_a_hull(self):
+        # Channel 16 THE WORKS runs `shows-made` at 2-7 and again at 15-18. Its daylight
+        # hours are 6, 15, 16 and 17 — the hull rendered that "06:00-18:00", claiming twelve
+        # hours for four.
+        from tub3.lineup import _spans, after_watershed_q, load
+        ch16 = [c for c in load(FIXTURE) if c.number == 16][0]
+        lit = set()
+        for part in ch16.dayparts:
+            if part.tag != "shows-made":
+                continue
+            lit |= {q for q in part.quarters() if not after_watershed_q(q)}
+        self.assertEqual(_spans(lit), "06:00-07:00 and 15:00-18:00")
+
+    def test_quarter_precision_survives(self):
+        from tub3.lineup import _spans, parse_span, Daypart
+        self.assertEqual(_spans(set(Daypart(*parse_span("19:45-20:00"), "x").quarters())),
+                         "19:45-20:00")
+        self.assertEqual(_spans(set(Daypart(*parse_span("17:00-20:30"), "x").quarters())),
+                         "17:00-20:30")
+
+    def test_nothing_renders_as_nothing(self):
+        from tub3.lineup import _spans
+        self.assertEqual(_spans(set()), "")
+
+
+class WindowEdges(unittest.TestCase):
+    """The two guarded windows, asked of a quarter rather than an hour.
+
+    Equivalent while both edges sit on the hour, and written this way so they stay correct
+    if either ever moves off it — the hour version would then answer for a whole hour that
+    the window only partly covers, in the one check that is not allowed to be approximate.
+    """
+
+    def test_the_watershed_covers_exactly_the_night(self):
+        from tub3.lineup import (QUARTERS_PER_DAY, WATERSHED_END, WATERSHED_HOUR,
+                                 after_watershed_q)
+        for q in range(QUARTERS_PER_DAY):
+            hour = q // 4
+            self.assertEqual(after_watershed_q(q),
+                             hour >= WATERSHED_HOUR or hour < WATERSHED_END, q)
+
+    def test_the_childrens_window_likewise(self):
+        from tub3.lineup import (CHILDRENS_HOURS_END, CHILDRENS_HOURS_START,
+                                 QUARTERS_PER_DAY, in_childrens_hours_q)
+        for q in range(QUARTERS_PER_DAY):
+            self.assertEqual(in_childrens_hours_q(q),
+                             CHILDRENS_HOURS_START <= q // 4 < CHILDRENS_HOURS_END, q)
+
+    def test_the_edges_themselves(self):
+        from tub3.lineup import after_watershed_q, in_childrens_hours_q
+        self.assertFalse(after_watershed_q(79))   # 19:45 — the last daylight quarter
+        self.assertTrue(after_watershed_q(80))    # 20:00
+        self.assertTrue(after_watershed_q(23))    # 05:45, still inside the night
+        self.assertFalse(after_watershed_q(24))   # 06:00
+        self.assertTrue(in_childrens_hours_q(67))   # 16:45
+        self.assertFalse(in_childrens_hours_q(68))  # 17:00
+        self.assertTrue(in_childrens_hours_q(24))   # 06:00
+        self.assertFalse(in_childrens_hours_q(23))  # 05:45
+
+
+class TheWatershedSliver(unittest.TestCase):
+    """A quarter of an hour of adult content before 20:00 is still before 20:00.
+
+    The watershed is the global rule — nothing above 14A airs before it, whatever the
+    channel is rated — so this is the check that a `late` channel cannot opt out of. A pool
+    dragged fifteen minutes earlier than the watershed has to be refused, and the refusal has
+    to say 19:45 rather than 19:00, because a person reading it needs to know which edge to
+    move.
+
+    A one-title source on purpose: `mixed` downgrades any catalogued source resolving to two
+    or more titles, so only a single title can produce an actual refusal here.
+    """
+
+    CATALOGUE = {"titles": [
+        {"path": "/media/TV/Californication", "content_rating": "TV-MA", "seconds": 1800},
+        {"path": "/media/TV/Bluey", "content_rating": "TV-Y", "seconds": 420},
+    ]}
+
+    def channel(self, span):
+        # A daytime block as well as the late one, so the day is fully covered. Without it
+        # the fourteen uncovered hours fall back to the channel's first tag and the late pool
+        # airs all afternoon — which is a different defect, pinned in `AnUncoveredGap` below.
+        return Channel(number=10, name="AFTER DARK", rating="late", increment=60,
+                       sources={"shows-day": ["/media/TV/Bluey"],
+                                "shows-dark": ["/media/TV/Californication"]},
+                       dayparts=[Daypart(*parse_span("6-20"), "shows-day"),
+                                 Daypart(*parse_span(span), "shows-dark")])
+
+    def refusals(self, span):
+        from tub3.lineup import audit
+        problems, _o, _u, _m, _i = audit([self.channel(span)], catalogue=self.CATALOGUE)
+        return problems
+
+    def test_at_the_watershed_it_passes(self):
+        self.assertEqual(self.refusals("20-6"), [])
+        self.assertEqual(self.refusals("20:00-06:00"), [])
+
+    def test_a_quarter_of_an_hour_early_is_refused(self):
+        hit = self.refusals("19:45-6")
+        self.assertTrue(hit, "fifteen minutes of TV-MA before the watershed went unnoticed")
+        self.assertIn("Californication", hit[0])
+        self.assertIn("nothing above 14A may air", hit[0])
+
+    def test_and_the_refusal_names_the_quarter_not_the_hour(self):
+        # "19:00-20:00" would send someone looking for an edge that is not there.
+        hit = self.refusals("19:45-6")
+        self.assertIn("19:45-20:00", hit[0])
+        self.assertNotIn("19:00-20:00", hit[0])
+
+    def test_the_lattice_says_whether_that_edge_was_even_reachable(self):
+        from tub3.lineup import lattice
+        # AFTER DARK is hourly, so 19:45 could never have been a mark in the first place —
+        # the editor refuses to draw it. The guard still has to hold for the channels where
+        # it is drawable, which is why both exist.
+        self.assertEqual(lattice(self.channel("19:45-6")), 60)
+        self.assertNotEqual((19 * 60 + 45) % 60, 0)
+
+
+class AnUncoveredGap(unittest.TestCase):
+    """The guard has to judge what airs, not what the dayparts mention.
+
+    A daypart list need not cover the day. `_quarter_grid` fills whatever it leaves with
+    `channel.default_tag()` — the first daypart's tag — and for as long as `audit()` read the
+    dayparts instead of the grid, those quarters were never looked at. One daypart of `20-6`
+    on an adult pool put TV-MA on screen at seven in the evening and the audit returned five
+    empty lists.
+
+    Both sides derive from `_quarter_grid` now, so the guard cannot disagree with the
+    schedule by construction rather than by the two of them happening to be written alike.
+    """
+
+    CATALOGUE = {"titles": [{"path": "/media/TV/Californication",
+                             "content_rating": "TV-MA", "seconds": 1800}]}
+
+    def audit(self, channel):
+        from tub3.lineup import audit
+        return audit([channel], catalogue=self.CATALOGUE)
+
+    def late_only(self, span="20-6"):
+        return Channel(number=10, name="AFTER DARK", rating="late", increment=60,
+                       sources={"shows-dark": ["/media/TV/Californication"]},
+                       dayparts=[Daypart(*parse_span(span), "shows-dark")])
+
+    def test_the_gap_is_what_actually_airs(self):
+        from tub3.lineup import _quarter_grid
+        grid = _quarter_grid(self.late_only(), "monday")
+        # 07:00, 12:00, 17:00, 19:00 — none of them mentioned by any daypart.
+        for quarter in (28, 48, 68, 76):
+            self.assertEqual(grid[quarter], "shows-dark")
+
+    def test_and_the_guard_now_sees_it(self):
+        problems, _o, _u, _m, _i = self.audit(self.late_only())
+        self.assertTrue(problems, "TV-MA aired through the whole afternoon unremarked")
+        self.assertIn("Californication", problems[0])
+        self.assertIn("06:00-20:00", problems[0])
+
+    def test_a_zero_length_span_is_refused_outright(self):
+        # "24-0" was the one span of 9,409 whose quarters() came out empty: it painted
+        # nothing, so the whole day fell back to the channel's first tag. Reading the grid
+        # would now catch that anyway, but a daypart that silently means nothing is still
+        # not something to accept.
+        with self.assertRaises(ValueError) as caught:
+            parse_span("24-0")
+        self.assertIn("end of the day", str(caught.exception))
+
+    def test_and_a_span_built_that_way_by_hand_is_still_caught(self):
+        # Constructed past the parser, which is what a future editor writing quarters
+        # directly could do.
+        by_hand = Channel(number=10, name="AFTER DARK", rating="late", increment=60,
+                          sources={"shows-dark": ["/media/TV/Californication"]},
+                          dayparts=[Daypart(96, 0, "shows-dark")])
+        self.assertEqual(by_hand.dayparts[0].quarters(), [])
+        problems, _o, _u, _m, _i = self.audit(by_hand)
+        self.assertTrue(problems, "a daypart painting nothing hid the whole channel")
+
+    def test_a_fully_covered_day_is_unaffected(self):
+        covered = Channel(number=10, name="AFTER DARK", rating="late", increment=60,
+                          sources={"shows-day": ["/media/TV/Bluey"],
+                                   "shows-dark": ["/media/TV/Californication"]},
+                          dayparts=[Daypart(*parse_span("6-20"), "shows-day"),
+                                    Daypart(*parse_span("20-6"), "shows-dark")])
+        problems, _o, _u, _m, _i = self.audit(covered)
+        self.assertEqual([p for p in problems if "Californication" in p], [])
+
+    def test_a_tag_that_only_reaches_daylight_on_one_day_is_still_judged(self):
+        # The check is deliberately day-agnostic: Saturday counts.
+        weekend_only = Channel(number=10, name="AFTER DARK", rating="late", increment=60,
+                               sources={"shows-day": ["/media/TV/Bluey"],
+                                        "shows-dark": ["/media/TV/Californication"]},
+                               dayparts=[Daypart(*parse_span("6-20"), "shows-day"),
+                                         Daypart(*parse_span("20-6"), "shows-dark"),
+                                         Daypart(*parse_span("14-16"), "shows-dark",
+                                                 days=["saturday"])])
+        problems, _o, _u, _m, _i = self.audit(weekend_only)
+        self.assertTrue(problems)
+        self.assertIn("14:00-16:00", problems[0])
+
+
+class IncrementsAndValidation(unittest.TestCase):
+    """`lattice()` has to describe the channel that gets compiled, not the one written down."""
+
+    def test_the_surviving_increment_is_the_last_dayparts(self):
+        from tub3.lineup import increments, lattice
+        # `compile_station` writes `tag_overrides` keyed by TAG and `update`s in daypart
+        # order, so two dayparts sharing a tag leave only the last one's increment. Reading
+        # the dayparts reported a channel finer than the one it compiles.
+        ch = Channel(number=99, name="T", increment=60,
+                     sources={"a": []},
+                     dayparts=[Daypart(*parse_span("6-10"), "a", increment=45),
+                               Daypart(*parse_span("10-14"), "a", increment=90)])
+        self.assertEqual(increments(ch)["a"], 90)
+        # 90, not gcd(45, 90) == 45: the 45 never reaches the station config at all. The
+        # channel's own 60 does not appear either, because every tag here is overridden and
+        # a station-level increment only applies to tags that are not.
+        self.assertEqual(lattice(ch), 90)
+
+    def test_zero_means_no_lattice_at_all_not_a_fine_one(self):
+        from tub3.lineup import lattice
+        # Upstream's `_calc_target_duration` short-circuits on a zero multiple and returns
+        # the raw duration, so marks land wherever content ends. `gcd(0, n) == n` would have
+        # hidden that behind the other increments.
+        ch = Channel(number=99, name="T", increment=60, sources={"a": []},
+                     dayparts=[Daypart(*parse_span("6-10"), "a", increment=0)])
+        self.assertEqual(lattice(ch), 0)
+
+    def test_a_nonsense_increment_is_refused_rather_than_answered(self):
+        from tub3.lineup import lattice
+        for bad in (-30, 45.0, "30", True):
+            ch = Channel(number=99, name="T", increment=bad, sources={"a": []})
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                lattice(ch)
+
+    def test_the_answer_does_not_depend_on_whether_a_daypart_exists(self):
+        from tub3.lineup import lattice
+        # A one-element reduce never calls gcd, so a bare channel used to skip every check
+        # gcd would have applied — -30 came back as -30, and 45.0 as 45.0.
+        bare = Channel(number=99, name="T", increment=30, sources={"a": []})
+        with_part = Channel(number=99, name="T", increment=30, sources={"a": []},
+                            dayparts=[Daypart(*parse_span("6-10"), "a")])
+        self.assertEqual(lattice(bare), lattice(with_part))
+
+
+class SpansReadAsASentence(unittest.TestCase):
+    def test_two_runs_are_joined_with_and(self):
+        from tub3.lineup import _spans
+        # This goes inside "airs X at {span}, but Plex rates it Y" — a second comma there
+        # makes one broken list of two separate things.
+        self.assertEqual(_spans({24, 25, 26, 27, 60, 61}), "06:00-07:00 and 15:00-15:30")
+
+    def test_three_runs_keep_the_commas_and_the_and(self):
+        from tub3.lineup import _spans
+        self.assertEqual(_spans({0, 1, 40, 41, 80, 81}),
+                         "00:00-00:30, 10:00-10:30 and 20:00-20:30")

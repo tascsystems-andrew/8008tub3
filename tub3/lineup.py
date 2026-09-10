@@ -30,6 +30,8 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, field
+from functools import reduce
+from math import gcd
 from pathlib import Path
 
 from .bootstrap import (
@@ -91,17 +93,6 @@ OVER_14A = frozenset({
 })
 
 
-def after_watershed(hour: int) -> bool:
-    """Is this hour inside the window where anything may air?"""
-    return hour >= WATERSHED_HOUR or hour < WATERSHED_END
-
-
-# Upstream keys a station config by these exact lowercase names, so this is the wire
-# format rather than a display list. Monday first, which is what makes WEEKDAYS[:5] and
-# WEEKDAYS[5:] mean "weekdays" and "weekend" without a second table.
-WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday",
-            "saturday", "sunday")
-
 # The day is 96 quarters, and a daypart boundary is a quarter index.
 #
 # Not because a quarter is the unit the scheduler thinks in — it is not; upstream reads a
@@ -113,6 +104,31 @@ WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday",
 QUARTER_MINUTES = 15
 QUARTERS_PER_HOUR = 60 // QUARTER_MINUTES
 QUARTERS_PER_DAY = 24 * QUARTERS_PER_HOUR
+
+
+def after_watershed_q(quarter: int) -> bool:
+    """Is this quarter inside the window where anything may air?
+
+    Asked of a quarter, which is the resolution a daypart has. There was an hour version and
+    it is gone: while both edges sit on the hour the two agree, and the moment one does not,
+    an hour-granular answer covers a whole hour the window only partly covers — in the one
+    check that is not allowed to be approximate.
+    """
+    return quarter >= WATERSHED_HOUR * QUARTERS_PER_HOUR \
+        or quarter < WATERSHED_END * QUARTERS_PER_HOUR
+
+
+def in_childrens_hours_q(quarter: int) -> bool:
+    """Likewise for the children's window, which is half-open at both ends."""
+    return (CHILDRENS_HOURS_START * QUARTERS_PER_HOUR
+            <= quarter < CHILDRENS_HOURS_END * QUARTERS_PER_HOUR)
+
+
+# Upstream keys a station config by these exact lowercase names, so this is the wire
+# format rather than a display list. Monday first, which is what makes WEEKDAYS[:5] and
+# WEEKDAYS[5:] mean "weekdays" and "weekend" without a second table.
+WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday",
+            "saturday", "sunday")
 
 
 def _quarter_of(text: str, span: str) -> int:
@@ -143,11 +159,104 @@ def parse_span(span: str) -> tuple[int, int]:
     start, dash, end = str(span).partition("-")
     if not dash:
         raise ValueError(f"hours {span!r}: expected a range like '6-10' or '17:00-20:30'")
-    return _quarter_of(start, span), _quarter_of(end, span)
+    start_q, end_q = _quarter_of(start, span), _quarter_of(end, span)
+    if start_q == QUARTERS_PER_DAY:
+        # "24-0" is the only span of the 9,409 on the grid whose `quarters()` is empty: it
+        # paints nothing, so the whole day falls back to the channel's first tag. The guard
+        # reads the compiled grid and catches that now, but a daypart that silently means
+        # nothing is still not something to accept.
+        raise ValueError(f"hours {span!r}: a range cannot start at the end of the day")
+    return start_q, end_q
+
+
+# What a channel's blocks are rounded up to when it does not say. Upstream's own default is
+# different; this is the one tub3 has always written into every station config.
+DEFAULT_INCREMENT = 30
+
+
+def increments(channel: "Channel") -> dict[str, int]:
+    """The block length each tag is actually compiled with, in minutes.
+
+    Per tag rather than per daypart, because `compile_station` writes `tag_overrides` keyed
+    by tag and `update`s them in daypart order — so when two dayparts share a tag, the last
+    one's increment is the only one that survives. Reading the dayparts instead reports a
+    channel finer than the one it compiles.
+    """
+    base = channel.increment or DEFAULT_INCREMENT
+    out = {tag: base for tag in channel.sources}
+    for part in channel.dayparts:
+        out.setdefault(part.tag, base)
+        if part.increment is not None:
+            out[part.tag] = part.increment
+    return out
+
+
+def lattice(channel: "Channel") -> int:
+    """The finest boundary this channel could land on, in minutes.
+
+    A block's length is `increment * ceil(content / increment)` and the next slot lookup
+    happens wherever that lands, so along the ordinary fill path marks are the running sum of
+    durations each rounded up to that tag's increment, and a minute that does not divide into
+    every increment on the channel cannot be one of them.
+
+    Necessary, not sufficient, and not universal:
+
+      - Divisibility says an edge *can* be a mark, never that one lands there. On channel 3
+        at increment 30, a 45-minute episode rounds to 60 and swallows the 17:30 mark.
+      - `schedule_increment: 0` disables rounding entirely — upstream's `_calc_target_duration`
+        short-circuits on a zero multiple and returns the raw duration, so marks land
+        wherever the content ends. `lattice` reports 0 for such a channel, meaning "no
+        lattice", and callers must read it as unconstrained rather than as one-minute.
+      - `schedule_offset` shifts every mark by a fixed amount and is applied on each
+        `_increment` call, so it both breaks the lattice and drifts. tub3 never emits one and
+        `compile_station` should refuse one if it ever appears.
+      - The off-air branch snaps forward to the top of the next hour regardless.
+
+    So this is what the editor may refuse outright, and nothing more. It is not a promise
+    that a divisible edge will be honoured, and the built-schedule underlay is what shows
+    whether it was.
+    """
+    found = set(increments(channel).values())
+    if not found:
+        return channel.increment or DEFAULT_INCREMENT
+    for value in found:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"channel {channel.number}: increment {value!r} is not a whole "
+                             f"number of minutes")
+        if value < 0:
+            raise ValueError(f"channel {channel.number}: increment {value} is negative")
+    # A zero anywhere means that tag is not rounded at all, and `gcd(0, n) == n` would hide
+    # it behind the others. No lattice is not the same as a fine one.
+    if 0 in found:
+        return 0
+    return reduce(gcd, found)
 
 
 def _hhmm(quarter: int) -> str:
     return f"{quarter // QUARTERS_PER_HOUR:02d}:{quarter % QUARTERS_PER_HOUR * QUARTER_MINUTES:02d}"
+
+
+def _spans(quarters: set[int]) -> str:
+    """A set of quarters as the clock times it actually covers.
+
+    The hull it replaces — `min(hours)`..`max(hours) + 1` — lies whenever a tag is used
+    twice in a day. Channel 16 runs `shows-made` at 2-7 and again at 15-18, whose daylight
+    hours are 6, 15, 16 and 17; the hull rendered that as "06:00-18:00", claiming twelve
+    hours for four. A refusal a person is meant to act on has to name the times that
+    actually caused it.
+    """
+    runs: list[list[int]] = []
+    for quarter in sorted(quarters):
+        if runs and runs[-1][1] == quarter:
+            runs[-1][1] = quarter + 1
+        else:
+            runs.append([quarter, quarter + 1])
+    text = [f"{_hhmm(a)}-{_hhmm(b)}" for a, b in runs]
+    if len(text) < 2:
+        return "".join(text)
+    # "and", not another comma: this goes inside a sentence that already has commas, and
+    # "airs X at 06:00-07:00, 15:00-18:00, but Plex rates it" reads as one broken list.
+    return ", ".join(text[:-1]) + " and " + text[-1]
 
 
 @dataclass
@@ -156,9 +265,9 @@ class Daypart:
 
     Held as quarter indices rather than hours, because the hour is the lossy view: a daypart
     that starts at 20:30 has no honest hour to report, and a field that rounds it silently is
-    the one every caller would then be reading. `hours()` is derived and rounds *outward* —
-    the callers that ask for hours are the rating checks and the settings page, and both want
-    "every hour this daypart touches at all".
+    the one every caller would then be reading. There was a derived `hours()` for the callers
+    that had not moved over yet; nothing calls it now, so it is gone rather than left as a
+    lossy view somebody would reach for.
     """
 
     start_q: int
@@ -219,21 +328,6 @@ class Daypart:
         if self.end_q > self.start_q:
             return list(range(self.start_q, self.end_q))
         return list(range(self.start_q, QUARTERS_PER_DAY)) + list(range(0, self.end_q))
-
-    def hours(self) -> list[int]:
-        """Every hour this daypart touches, in the order it touches them.
-
-        Rounds outward: 19:45-20:00 touches hour 19, and an implementation that reported
-        nothing there would hide a fifteen-minute sliver from the rating checks at
-        `audit()`. Identical to the old hour arithmetic for an hour-aligned daypart, which
-        is every daypart on the dial today.
-        """
-        seen: list[int] = []
-        for quarter in self.quarters():
-            hour = quarter // QUARTERS_PER_HOUR
-            if not seen or seen[-1] != hour:
-                seen.append(hour)
-        return seen
 
     def span(self) -> str:
         """`"06:00-10:00"` — for people, not for the config."""
@@ -689,17 +783,30 @@ def audit(channels: list[Channel], *, catalogue: dict | None = None
 
         # Which tags touch a daylight hour. A channel with no dayparts runs one tag around
         # the clock, so all of its sources do.
+        # Read off the day the compiler will actually emit, not off the dayparts.
+        #
+        # A daypart list need not cover the day; `_quarter_grid` fills what it leaves with
+        # the channel's first tag, and asking the dayparts instead meant the guard never
+        # looked at those quarters. One daypart of `20-6` on an adult pool aired TV-MA at
+        # seven in the evening with all five lists coming back empty.
+        #
+        # Every day of the week, unioned, because this check is deliberately day-agnostic:
+        # a tag that reaches daylight on any one day is a tag that reaches daylight.
         daylight: dict[str, set[int]] = {}
         if channel.dayparts:
-            for part in channel.dayparts:
-                lit = {h for h in part.hours() if not after_watershed(h)}
-                if lit:
-                    daylight.setdefault(part.tag, set()).update(lit)
+            for day in WEEKDAYS:
+                for quarter, tag in enumerate(_quarter_grid(channel, day)):
+                    if not after_watershed_q(quarter):
+                        daylight.setdefault(tag, set()).add(quarter)
         else:
+            # No dayparts is the one case where the grid is less informative than the
+            # sources: it airs only `default_tag()`, but a pool listed and never scheduled is
+            # a trap waiting for the first daypart somebody adds. Judge them all.
             for tag in channel.sources:
-                daylight[tag] = {h for h in range(24) if not after_watershed(h)}
+                daylight[tag] = {q for q in range(QUARTERS_PER_DAY)
+                                 if not after_watershed_q(q)}
 
-        for tag, hours in daylight.items():
+        for tag, daylit in daylight.items():
             for folder in channel.sources.get(tag, []):
                 rows = _titles_under(cat_index, folder) if cat_index else []
                 if rows:
@@ -708,7 +815,7 @@ def audit(channels: list[Channel], *, catalogue: dict | None = None
                     # play, and 31 paths here are shared by more than one title.
                     code, worst, total, over = _strictest_of(rows)
                     if over and total > 1 and folder not in channel.rated_daytime:
-                        span = f"{min(hours):02d}:00-{max(hours) + 1:02d}:00"
+                        span = _spans(daylit)
                         mixed.append(
                             f"channel {channel.number} ({channel.name!r}) draws {folder!r} at "
                             f"{span} — {over} of {total} titles there are above 14A or "
@@ -757,7 +864,7 @@ def audit(channels: list[Channel], *, catalogue: dict | None = None
                         f"Plex rates it {worst}"
                     )
                     continue
-                span = f"{min(hours):02d}:00-{max(hours) + 1:02d}:00"
+                span = _spans(daylit)
                 problems.append(
                     f"channel {channel.number} ({channel.name!r}) airs {folder!r} at {span}, "
                     f"but Plex rates it {worst} — nothing above 14A may air "
@@ -780,10 +887,11 @@ def audit(channels: list[Channel], *, catalogue: dict | None = None
         # is the part no daypart rule could fix afterwards.
         guarded = set()
         if channel.dayparts:
-            for part in channel.dayparts:
-                if any(CHILDRENS_HOURS_START <= hour < CHILDRENS_HOURS_END
-                       for hour in part.hours()):
-                    guarded.add(part.tag)
+            # Same grid, same reason: the hours no daypart claims are aired by somebody.
+            for day in WEEKDAYS:
+                for quarter, tag in enumerate(_quarter_grid(channel, day)):
+                    if in_childrens_hours_q(quarter):
+                        guarded.add(tag)
         else:
             guarded = set(channel.sources)
 
@@ -1166,6 +1274,25 @@ def _day_template(channel: Channel, day: str) -> dict[str, dict]:
     broad `9-15 shows-kids` is written first and `10-11 shows-price, weekdays` after it, in
     the order a person would say them.
     """
+    grid = _quarter_grid(channel, day)
+    return {str(hour): {"tags": _collapse(grid[hour * QUARTERS_PER_HOUR:
+                                              (hour + 1) * QUARTERS_PER_HOUR])}
+            for hour in range(24)}
+
+
+def _quarter_grid(channel: Channel, day: str) -> list[str]:
+    """What actually airs, quarter by quarter, for one day.
+
+    The single answer to "what is on at this moment", used by the compiler to emit the
+    station config and by `audit()` to judge it. They used to derive it separately —
+    the compiler from this fallback-and-overwrite, the guard from the dayparts alone — and
+    the difference was a hole: a channel whose dayparts leave a gap airs its first daypart's
+    tag in that gap, and the guard never looked there. One daypart of `20-6` on an adult pool
+    put TV-MA on screen at seven in the evening with `audit()` returning five empty lists.
+
+    Deriving both from here means the guard cannot disagree with the schedule by
+    construction, rather than by the two of them happening to be written the same way.
+    """
     fallback = channel.default_tag()
     grid = [fallback] * QUARTERS_PER_DAY
     for part in channel.dayparts:
@@ -1173,9 +1300,7 @@ def _day_template(channel: Channel, day: str) -> dict[str, dict]:
             continue
         for quarter in part.quarters():
             grid[quarter] = part.tag
-    return {str(hour): {"tags": _collapse(grid[hour * QUARTERS_PER_HOUR:
-                                              (hour + 1) * QUARTERS_PER_HOUR])}
-            for hour in range(24)}
+    return grid
 
 
 def _collapse(quarters: list[str]) -> str | list[str]:
@@ -1265,7 +1390,7 @@ def compile_station(channel: Channel, media_root: Path, *, pools: dict[str, str]
         # worth finding.
         "break_strategy": channel.breaks,
         "break_duration": channel.break_duration,
-        "schedule_increment": channel.increment or 30,
+        "schedule_increment": channel.increment or DEFAULT_INCREMENT,
         "standby_image": "runtime/tub3_standby.png",
         "be_right_back_media": "runtime/tub3_brb.png",
     }
@@ -1301,7 +1426,8 @@ def compile_station(channel: Channel, media_root: Path, *, pools: dict[str, str]
     overrides: dict[str, dict] = {}
     for part in channel.dayparts:
         entry = {}
-        if part.increment is not None and part.increment != (channel.increment or 30):
+        if part.increment is not None \
+                and part.increment != (channel.increment or DEFAULT_INCREMENT):
             entry["schedule_increment"] = part.increment
         if part.breaks is not None and part.breaks != channel.breaks:
             entry["break_strategy"] = part.breaks
@@ -1493,7 +1619,7 @@ def main(argv: list[str] | None = None) -> int:
             breaks = "no mid-rolls" if channel.breaks == "end" else channel.breaks
             ads = "ad-free" if channel.commercial_free else channel.rating
             print(f"  {channel.number:>3}  {channel.name:<22} {ads:<8} "
-                  f"{channel.increment or 30:>3}min  {breaks}")
+                  f"{channel.increment or DEFAULT_INCREMENT:>3}min  {breaks}")
             for part in channel.dayparts:
                 print(f"       {part.span()}  {part.tag}")
         print()
