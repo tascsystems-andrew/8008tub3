@@ -1012,15 +1012,22 @@ def _link_pool(media_root: Path, tag: str, folders: list[str],
         )
 
     pool = media_root / tag
-    if pool.exists():
-        for stale in pool.iterdir():
-            if stale.is_symlink():
-                stale.unlink()
     pool.mkdir(parents=True, exist_ok=True)
 
     patterns = [pattern.lower() for pattern in (exclude or [])]
 
-    linked = 0
+    # Work out the whole answer first, then reconcile.
+    #
+    # This used to unlink every symlink in the pool and relink from scratch, which left the
+    # directory *empty* for the length of a rebuild. The supervisor and the tuner both read
+    # these pools while apply runs, and a station whose content directory is momentarily
+    # empty is a station with nothing on. Nothing announced the window and nothing waited for
+    # it to close; it simply had not been noticed, because a rebuild is usually quick and the
+    # television is usually not being watched at the moment somebody runs one.
+    #
+    # Set difference has the property that matters: a link that is wanted before and after is
+    # never removed, so the pool is never smaller than the intersection.
+    wanted: dict[str, Path] = {}
     for folder in folders:
         source = Path(folder)
         if not source.exists():
@@ -1034,13 +1041,33 @@ def _link_pool(media_root: Path, tag: str, folders: list[str],
             if any(pattern in relative for pattern in patterns):
                 continue
             # Prefix with the series name so two shows with an "S01E01" cannot collide.
-            link = pool / f"{prefix}__{item.name}"
-            if not link.exists():
-                try:
-                    link.symlink_to(item.resolve())
-                except OSError:
+            wanted[f"{prefix}__{item.name}"] = item
+
+    linked = 0
+    for name, item in wanted.items():
+        link = pool / name
+        target = item.resolve()
+        if link.is_symlink():
+            try:
+                if link.readlink() == target:
+                    linked += 1
                     continue
+            except OSError:
+                pass
+            link.unlink()
+        elif link.exists():
             linked += 1
+            continue
+        try:
+            link.symlink_to(target)
+        except OSError:
+            continue
+        linked += 1
+
+    # Only now, and only what is no longer wanted.
+    for stale in pool.iterdir():
+        if stale.is_symlink() and stale.name not in wanted:
+            stale.unlink()
     return linked
 
 
