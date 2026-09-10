@@ -407,15 +407,28 @@ class LiquidChannel(Channel):
         except OSError:
             self._loaded_mtime = 0.0
 
-        conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)
+        # Read-only, and prepared to wait. The schedule builder writes this database while
+        # the tuner reads it, and a builder mid-commit holds a lock for as long as the write
+        # takes. Without a timeout sqlite gives up instantly and raises, and an unhandled
+        # raise here is the tuner thread dying — the television stops at whatever frame it
+        # was showing, on a box whose whole promise is that it cannot get stuck. Five seconds
+        # is far longer than any commit here and still shorter than a block.
         try:
-            rows = conn.execute(
-                "SELECT start_time, end_time, title, plan_json FROM liquid_blocks "
-                "WHERE station = ? AND start_time < ? AND end_time > ? ORDER BY start_time",
-                (self.station, hi, lo),
-            ).fetchall()
-        finally:
-            conn.close()
+            conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=5.0)
+            try:
+                conn.execute("PRAGMA busy_timeout = 5000")
+                rows = conn.execute(
+                    "SELECT start_time, end_time, title, plan_json FROM liquid_blocks "
+                    "WHERE station = ? AND start_time < ? AND end_time > ? ORDER BY start_time",
+                    (self.station, hi, lo),
+                ).fetchall()
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            # Locked, mid-rebuild, or briefly not a database at all. Keep whatever blocks are
+            # already loaded and try again at the next boundary: stale listings are a far
+            # better failure than a dead tuner, and `_stale()` will bring us back.
+            return
 
         blocks: list[Block] = []
         for start_text, end_text, title, plan_json in rows:

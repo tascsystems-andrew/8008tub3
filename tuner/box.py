@@ -472,17 +472,7 @@ class Box:
         airing = self.lineup.now(channel, time.time())
         if airing is None or airing.off_air:
             # Dead air. A real station showed a sign-off card rather than a black screen.
-            self.channel = channel
-            self._on_air = channel
-            self._tuning = ""
-            self.bug = BugState()
-            # The card is the whole screen, so the tuning number has to come down with it —
-            # otherwise the last thing drawn before the card is left sitting on top of it.
-            self.player.hide_overlay(overlay_id=3)
-            self.player.show_overlay(
-                r"{\an5\pos(960,540)\fnmonospace\fs42\1c&H55FF33&}"
-                f"CHANNEL {channel}\\NOFF AIR", overlay_id=2,
-            )
+            self._off_air(channel)
             return
 
         self.player.hide_overlay(overlay_id=2)
@@ -496,6 +486,21 @@ class Box:
                                   duration=airing.program.duration,
                                   play_for=airing.remaining)
         self.last_latency_ms = result.latency_ms
+        if not result.ok:
+            # The file would not open. `TuneResult.ok` has always been returned and never
+            # read: the tuner set the channel, drew the bug and left whatever was already on
+            # screen, so a missing file looked exactly like a programme that had frozen. A
+            # television with a dead transmitter shows a card; this one showed the last frame
+            # of the previous programme, indefinitely, with the right channel number over it.
+            #
+            # The same card as genuine dead air, deliberately. From the sofa there is no
+            # difference worth drawing between "nothing is scheduled" and "what is scheduled
+            # will not play", and inventing a second card would mean inventing a second
+            # explanation for a viewer who cannot act on either.
+            print(f"  tune ch{channel} failed: {result.error or 'no reason given'}",
+                  flush=True)
+            self._off_air(channel)
+            return
         self._on_air = channel
         if seq != self._tune_seq:
             # A press landed while the file was opening, and it owns the screen now — its own
@@ -510,7 +515,50 @@ class Box:
         # because a BACK press must describe what is on now, not what was on before.
         shown_at = time.monotonic() if announce else self.bug.shown_at
         self.bug = BugState(airing=airing, shown_at=shown_at)
+        self._write_state(channel)
         self._redraw()
+
+    def _off_air(self, channel: int) -> None:
+        """The sign-off card. One implementation, because two would drift."""
+        self.channel = channel
+        self._on_air = channel
+        self._tuning = ""
+        self.bug = BugState()
+        # The card is the whole screen, so the tuning number has to come down with it —
+        # otherwise the last thing drawn before the card is left sitting on top of it.
+        self.player.hide_overlay(overlay_id=3)
+        self.player.show_overlay(
+            r"{\an5\pos(960,540)\fnmonospace\fs42\1c&H55FF33&}"
+            f"CHANNEL {channel}\\NOFF AIR", overlay_id=2,
+        )
+        self._write_state(channel, on_air=False)
+
+    def _write_state(self, channel: int, *, on_air: bool = True) -> None:
+        """What the television is doing, where another process can read it.
+
+        Nothing else can answer "is somebody watching channel 16 right now". The publisher
+        needs it to refuse an edit to a channel that is on air, and there is no other way to
+        ask — the tuner owns mpv and does not serve anything.
+
+        Written whole and renamed into place, and every failure swallowed. This is a status
+        file: a box that cannot write it must still play television.
+        """
+        import json as _json  # noqa: PLC0415
+        import os as _os      # noqa: PLC0415
+
+        path = Path(__file__).resolve().parent.parent / "runtime" / "tuner-state.json"
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(_json.dumps({
+                "channel": channel,
+                "on_air": on_air,
+                "station": getattr(self.lineup.get(channel), "name", "") or "",
+                "at": time.time(),
+            }))
+            _os.replace(tmp, path)
+        except Exception:  # noqa: BLE001 - a status file must never cost you the picture
+            pass
 
     def _tune_ambiance(self, channel: int, *, announce: bool = True) -> None:
         """Put the loop up. No schedule, no catalogue, no backdrop — the video is the picture.
@@ -551,6 +599,7 @@ class Box:
         self._tuning = ""
         shown_at = time.monotonic() if announce else self.bug.shown_at
         self.bug = BugState(airing=airing, shown_at=shown_at)
+        self._write_state(channel)
         self._redraw()
 
     def _tune_guide(self, channel: int, *, announce: bool = True) -> None:
@@ -584,6 +633,7 @@ class Box:
         self._guide_rows_at = 0.0
         self._guide_ass = None
         self._guide_pushed_at = 0.0
+        self._write_state(channel)
         self._redraw_guide()
 
     def _redraw_guide(self) -> None:
