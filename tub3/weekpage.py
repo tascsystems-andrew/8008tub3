@@ -96,8 +96,20 @@ function drawGrid(){
       // A channel with no dayparts runs one tag round the clock. Outlined, because that is
       // the shape that makes a channel called SATURDAY AM play cartoons on Tuesday morning.
       const flat = c.flat ? ' flat' : '';
-      return `<td><div class="slot${flat}" title="${esc(slot.tag)}"`
-           + ` style="background:hsl(${hue(slot.tag)} 55% 62%)">${esc(name)}</div></td>`;
+      // An hour the schedule splits is drawn split. Anything else would put a boundary on
+      // this page that the television does not have.
+      //
+      // Painted as one hard-stopped gradient rather than as child elements, so a split cell
+      // is the same box as every other cell — bands as children gave the div no content
+      // width and the column collapsed narrower than its neighbours.
+      const paint = t => t ? `hsl(${hue(t)} 55% 62%)` : '#151312';
+      const bg = slot.quarters
+        ? `linear-gradient(90deg,` + slot.quarters.map((t,i)=>
+            `${paint(t)} ${i*25}%,${paint(t)} ${(i+1)*25}%`).join(',') + `)`
+        : paint(slot.tag);
+      const title = slot.quarters ? slot.quarters.map(t=>t||'—').join(' \u2192 ') : slot.tag;
+      return `<td><div class="slot${flat}" title="${esc(title)}"`
+           + ` style="background:${bg}">${esc(name)}</div></td>`;
     }).join('');
     return `<tr><th><b>${c.number}</b> ${esc(c.name)}<i>${esc(c.rating)}`
          + `${c.flat?' · no dayparts':''}</i></th>${cells}</tr>`;

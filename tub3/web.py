@@ -184,6 +184,45 @@ BROWSE_LIMIT = 300
 COUNT_LIMIT = 80
 
 
+def week_cells(channel, day: str) -> list:
+    """One channel's day, as 24 hour cells.
+
+    Painted per quarter and collapsed per hour, the same way `lineup._day_template` compiles
+    it. Painting per hour instead would let a daypart that owns only part of an hour claim
+    all of it and erase the one before — this page would then draw a boundary the schedule
+    does not have, on the page whose whole job is to show what the schedule is. Nothing on
+    the dial is sub-hour today; this is what stops the first one being drawn as a lie.
+
+    An hour whose quarters agree keeps the shape it has always had, so the common case is
+    byte-for-byte the same payload. A split hour keeps a whole-hour identity for anything
+    that only wants a label — the tag the hour opens with — and carries the four quarters
+    beside it for a page that can draw them.
+    """
+    from . import lineup as L  # noqa: PLC0415
+
+    grid: list = [None] * L.QUARTERS_PER_DAY
+    for part in channel.dayparts:
+        # The scheduler's own answer, not a second copy of it. This page had its own day
+        # expander that knew "weekdays" and not "weekday", while `applies_on` accepts both —
+        # so a daypart written the singular way aired correctly and disappeared out of the
+        # grid that is supposed to show what airs.
+        if not part.applies_on(day):
+            continue
+        cell = {"tag": part.tag, "name": part.tag}
+        for quarter in part.quarters():
+            grid[quarter] = cell
+
+    hours: list = []
+    for hour in range(24):
+        quad = grid[hour * L.QUARTERS_PER_HOUR:(hour + 1) * L.QUARTERS_PER_HOUR]
+        if all(q is quad[0] for q in quad):
+            hours.append(quad[0])
+            continue
+        head = next(q for q in quad if q)
+        hours.append({**head, "quarters": [q["tag"] if q else None for q in quad]})
+    return hours
+
+
 def dial_week() -> dict:
     """The dial as a week, plus what the guard thinks of it.
 
@@ -205,13 +244,7 @@ def dial_week() -> dict:
     for channel in sorted(channels, key=lambda c: c.number):
         week: dict[str, list] = {}
         for day in days:
-            hours: list = [None] * 24
-            for part in channel.dayparts:
-                if part.days and day not in _expand_days(part.days):
-                    continue
-                for hour in part.hours():
-                    hours[hour % 24] = {"tag": part.tag,
-                                        "name": getattr(part, "name", "") or part.tag}
+            hours = week_cells(channel, day)
             if not channel.dayparts:
                 # No dayparts at all: one tag round the clock. Drawn, rather than left blank,
                 # because this is the shape that makes a channel called SATURDAY AM play
@@ -247,21 +280,6 @@ def dial_week() -> dict:
             "vetted": len(overrides),
         },
     }
-
-
-def _expand_days(days: list[str]) -> set[str]:
-    """`weekdays` and `weekend` are shorthand the lineup already uses."""
-    names = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
-    out: set[str] = set()
-    for entry in days:
-        key = str(entry).strip().lower()
-        if key == "weekdays":
-            out |= set(names[:5])
-        elif key in ("weekend", "weekends"):
-            out |= set(names[5:])
-        else:
-            out.add(key)
-    return out
 
 
 def browse(where: str) -> dict:

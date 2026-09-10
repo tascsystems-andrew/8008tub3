@@ -102,13 +102,67 @@ def after_watershed(hour: int) -> bool:
 WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday",
             "saturday", "sunday")
 
+# The day is 96 quarters, and a daypart boundary is a quarter index.
+#
+# Not because a quarter is the unit the scheduler thinks in — it is not; upstream reads a
+# slot only at a block start mark, and marks land on that tag's `schedule_increment`. It is
+# the finest unit *any* channel here can express: `get_tag_from_slot` segments an hour evenly
+# across a list of tags, so two tags is :00/:30 and four is :00/:15/:30/:45. Three is legal
+# upstream and undrawable on a quarter grid, which is why the emitter below never produces
+# one — an editor that accepts what it cannot render is an editor nobody trusts.
+QUARTER_MINUTES = 15
+QUARTERS_PER_HOUR = 60 // QUARTER_MINUTES
+QUARTERS_PER_DAY = 24 * QUARTERS_PER_HOUR
+
+
+def _quarter_of(text: str, span: str) -> int:
+    """One end of an `hours` range, as a quarter index 0-96.
+
+    Accepts the bare hour every channel is written in today (`"6"`) and the clock time the
+    grid editor will write (`"20:30"`). 24 and "24:00" both mean the end of the day, which is
+    what `"20-24"` has always meant.
+    """
+    hour, colon, minute = text.strip().partition(":")
+    try:
+        hours = int(hour)
+        minutes = int(minute) if colon else 0
+    except ValueError:
+        raise ValueError(f"hours {span!r}: {text.strip()!r} is not a time") from None
+    if not 0 <= hours <= 24 or not 0 <= minutes < 60:
+        raise ValueError(f"hours {span!r}: {text.strip()!r} is not a time of day")
+    if minutes % QUARTER_MINUTES:
+        raise ValueError(f"hours {span!r}: {text.strip()!r} is not on the quarter hour")
+    quarter = hours * QUARTERS_PER_HOUR + minutes // QUARTER_MINUTES
+    if quarter > QUARTERS_PER_DAY:
+        raise ValueError(f"hours {span!r}: {text.strip()!r} is past the end of the day")
+    return quarter
+
+
+def parse_span(span: str) -> tuple[int, int]:
+    """`"6-10"` and `"17:00-20:30"` alike, to a pair of quarter indices."""
+    start, dash, end = str(span).partition("-")
+    if not dash:
+        raise ValueError(f"hours {span!r}: expected a range like '6-10' or '17:00-20:30'")
+    return _quarter_of(start, span), _quarter_of(end, span)
+
+
+def _hhmm(quarter: int) -> str:
+    return f"{quarter // QUARTERS_PER_HOUR:02d}:{quarter % QUARTERS_PER_HOUR * QUARTER_MINUTES:02d}"
+
 
 @dataclass
 class Daypart:
-    """Which tag airs during which hours. `hours` is inclusive-start, exclusive-end."""
+    """Which tag airs during which part of the day, inclusive-start, exclusive-end.
 
-    start: int
-    end: int
+    Held as quarter indices rather than hours, because the hour is the lossy view: a daypart
+    that starts at 20:30 has no honest hour to report, and a field that rounds it silently is
+    the one every caller would then be reading. `hours()` is derived and rounds *outward* —
+    the callers that ask for hours are the rating checks and the settings page, and both want
+    "every hour this daypart touches at all".
+    """
+
+    start_q: int
+    end_q: int
     tag: str
     # Block length and break policy for this daypart alone, overriding the channel's.
     #
@@ -158,11 +212,43 @@ class Daypart:
                 wanted.add(key)
         return day in wanted
 
+    def quarters(self) -> list[int]:
+        # Wrap past midnight: 22-02 means the quarters from 88 to 96, then 0 to 8. An end
+        # that is not past the start is a wrap, which is what makes `"23-6"` work and what
+        # has always made `"6-6"` mean the whole day.
+        if self.end_q > self.start_q:
+            return list(range(self.start_q, self.end_q))
+        return list(range(self.start_q, QUARTERS_PER_DAY)) + list(range(0, self.end_q))
+
     def hours(self) -> list[int]:
-        # Wrap past midnight: 22-02 means 22, 23, 0, 1.
-        if self.end > self.start:
-            return list(range(self.start, self.end))
-        return list(range(self.start, 24)) + list(range(0, self.end))
+        """Every hour this daypart touches, in the order it touches them.
+
+        Rounds outward: 19:45-20:00 touches hour 19, and an implementation that reported
+        nothing there would hide a fifteen-minute sliver from the rating checks at
+        `audit()`. Identical to the old hour arithmetic for an hour-aligned daypart, which
+        is every daypart on the dial today.
+        """
+        seen: list[int] = []
+        for quarter in self.quarters():
+            hour = quarter // QUARTERS_PER_HOUR
+            if not seen or seen[-1] != hour:
+                seen.append(hour)
+        return seen
+
+    def span(self) -> str:
+        """`"06:00-10:00"` — for people, not for the config."""
+        return f"{_hhmm(self.start_q)}-{_hhmm(self.end_q)}"
+
+    def hours_text(self) -> str:
+        """The canonical `hours` string for lineup.json.
+
+        The compact form when both ends land on the hour, so a file written back out reads
+        the way it was hand-written and a round trip changes nothing. Paired with
+        `parse_span` deliberately: an emitter that lives away from its parser drifts from it.
+        """
+        if self.start_q % QUARTERS_PER_HOUR == 0 and self.end_q % QUARTERS_PER_HOUR == 0:
+            return f"{self.start_q // QUARTERS_PER_HOUR}-{self.end_q // QUARTERS_PER_HOUR}"
+        return self.span()
 
 
 @dataclass
@@ -305,10 +391,9 @@ def load(path: Path) -> list[Channel]:
     for raw in data.get("channels", []):
         dayparts = []
         for part in raw.get("dayparts", []):
-            span = str(part["hours"])
-            start, _, end = span.partition("-")
+            start_q, end_q = parse_span(str(part["hours"]))
             dayparts.append(Daypart(
-                int(start), int(end), part["tag"],
+                start_q, end_q, part["tag"],
                 increment=part.get("increment"),
                 breaks=part.get("breaks"),
                 days=list(part.get("days", [])),
@@ -1082,13 +1167,36 @@ def _day_template(channel: Channel, day: str) -> dict[str, dict]:
     the order a person would say them.
     """
     fallback = channel.default_tag()
-    slots = {str(hour): {"tags": fallback} for hour in range(24)}
+    grid = [fallback] * QUARTERS_PER_DAY
     for part in channel.dayparts:
         if not part.applies_on(day):
             continue
-        for hour in part.hours():
-            slots[str(hour)] = {"tags": part.tag}
-    return slots
+        for quarter in part.quarters():
+            grid[quarter] = part.tag
+    return {str(hour): {"tags": _collapse(grid[hour * QUARTERS_PER_HOUR:
+                                              (hour + 1) * QUARTERS_PER_HOUR])}
+            for hour in range(24)}
+
+
+def _collapse(quarters: list[str]) -> str | list[str]:
+    """One hour of the quarter grid, in the shape `get_tag_from_slot` reads.
+
+    Upstream segments an hour evenly across however many tags it finds, so the length of the
+    list *is* the boundary: one is the whole hour, two is :30, four is every quarter. A bare
+    string when nothing changes, which is what every channel on the dial emits today and what
+    keeps the compiled configs byte-identical.
+
+    Three is never emitted. It is legal upstream — `floor(60/3)` gives twenty-minute thirds —
+    and there is no way to draw it on a quarter grid, so a boundary that would need one is
+    written as four instead: `[a, a, b, b]` is the same hour as `[a, b]` and `[a, a, a, b]` is
+    a quarter to the hour, which a person can see.
+    """
+    first, second, third, fourth = quarters
+    if first == second == third == fourth:
+        return first
+    if first == second and third == fourth:
+        return [first, third]
+    return list(quarters)
 
 
 def _day_templates(channel: Channel) -> tuple[dict[str, dict], dict[str, str]]:
@@ -1387,7 +1495,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {channel.number:>3}  {channel.name:<22} {ads:<8} "
                   f"{channel.increment or 30:>3}min  {breaks}")
             for part in channel.dayparts:
-                print(f"       {part.start:02d}:00-{part.end:02d}:00  {part.tag}")
+                print(f"       {part.span()}  {part.tag}")
         print()
         return 0
 
