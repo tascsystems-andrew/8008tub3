@@ -103,6 +103,51 @@ def episode_title(stem: str) -> str:
     return ""
 
 
+# A title with its own season/episode marker in it: `The Office S09E22 A.A.R.M.`. Split so the
+# half in front can say which separator the filename used.
+# `(?!\d)` matters: without it the engine backtracks into the episode number to satisfy
+# `rest`, and `The Office S06E01` yields the episode title "1".
+FILED = re.compile(r"^(?P<show>.*?)[\s._\-]*[Ss]\d{1,2}[\s._\-]?[Ee]\d{1,3}(?!\d)[\s._\-]*(?P<rest>.+)$")
+# A scene group hung off the end: `@W4NT0Ks`, `-RARBG`. Always carries a digit or is all caps
+# after a dash; a real title does not end that way.
+GROUP_TAG = re.compile(r"\s*[@\-]\s*[A-Za-z0-9]*\d[A-Za-z0-9]*\s*$")
+
+
+def unfiled(title: str) -> str:
+    """Recover the episode name from a Plex title that is really a filename.
+
+    Plex answers with the file's own name when it matched the *series* but not the episode,
+    and 440 files in this library are in that state — all of The Simpsons and all of The
+    Office (US), which is most of channel 3's evening. The bug then read
+    "The Office (US) — The Office S06E01 Gossip".
+
+    An episode title never contains its own SxxExx marker, so a title that does is a filename
+    in disguise and what follows the marker is the name somebody typed. Returns "" when the
+    title is not of that shape, which means the caller keeps what Plex said.
+
+    `clean` and `_plausible` are deliberately *not* used here. They defend against scene
+    release debris, and against a name a person typed they are simply wrong: `clean` strips
+    trailing capitals and turns "PDA" into nothing, `_plausible` rejects anything under two
+    words and vetoes "Girly Edition" for containing the word "edition". Only the noise
+    vocabulary is stripped, because that much does still turn up in these names.
+    """
+    match = FILED.match(title)
+    if not match:
+        return ""
+    show, rest = match.group("show"), match.group("rest")
+    # The separator style is established by the half in front of the marker. In
+    # `Escape.to.the.Country.S23E51` the dots are separators; in `The Office S09E22 A.A.R.M.`
+    # they are punctuation, and flattening them gives "A A R M".
+    if "." in show and " " not in show:
+        rest = rest.replace(".", " ").replace("_", " ")
+    rest = re.sub(r"\b(AAC|DDP|DD|DTS|EAC3|AC3|TrueHD|Atmos|FLAC|MP3|Opus)[\d.\-]*\b",
+                  " ", rest, flags=re.I)
+    for noise in NOISE:
+        rest = re.sub(rf"\b{re.escape(noise)}\b", " ", rest, flags=re.I)
+    rest = GROUP_TAG.sub("", rest)
+    return " ".join(rest.split()).strip(" -_")
+
+
 def describe(path: str | Path) -> tuple[str, str]:
     """(headline, subtitle) for the bug. Falls back to a tidied filename, never to nothing.
 
@@ -122,7 +167,8 @@ def describe(path: str | Path) -> tuple[str, str]:
     # resolution, a codec, a group and a bot, and nothing a viewer wants — and any scraper
     # confident enough to find a title in that will find one in noise too.
     if entry and entry.get("episode"):
-        return (entry.get("show") or clean(stem))[:44] or "—", str(entry["episode"])[:52]
+        named = str(entry["episode"])
+        return (entry.get("show") or clean(stem))[:44] or "—", (unfiled(named) or named)[:52]
 
     season, number = parse_episode(stem)
     detail = episode_title(stem)

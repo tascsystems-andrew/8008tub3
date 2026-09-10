@@ -166,6 +166,74 @@ def _entry(item: dict, offset: float, mapping: dict | None) -> dict:
     }
 
 
+# What counts as an interruption rather than the programme. Imported from the tuner rather
+# than restated, because two lists of break types is how the television and the app end up
+# disagreeing about whether an ident is a programme.
+from tuner.schedule import BREAK_TYPES  # noqa: E402
+
+
+def _feature_index(entries: list, index: int) -> int:
+    """Which entry is the *programme*, seen from `index`. `tuner.schedule._feature_slot`.
+
+    Backwards first: during a mid-roll the programme is the thing that was already playing,
+    and the viewer's question is "what am I watching", not "what is this advert". Forwards is
+    the fallback for a block that opens with an ident, where there is nothing behind us yet.
+    """
+    if not entries or not (0 <= index < len(entries)):
+        return index
+    if (entries[index].get("content_type") or "") not in BREAK_TYPES:
+        return index
+    for position in range(index - 1, -1, -1):
+        if (entries[position].get("content_type") or "") not in BREAK_TYPES:
+            return position
+    for position in range(index + 1, len(entries)):
+        if (entries[position].get("content_type") or "") not in BREAK_TYPES:
+            return position
+    return index
+
+
+def _feature(entries: list, index: int, offset: float, mapping: dict | None) -> dict | None:
+    """The programme, and how long until it actually finishes — ads included.
+
+    The television has drawn its bug from this since somebody noticed it was captioning the
+    picture with the name of a commercial. `/api/tv/N/now` never got the same treatment, so
+    the app kept doing exactly that: `now` is the entry on screen, which during a break is the
+    advert. Its own comment in tuner/schedule.py says it plainly — "correct for playback and
+    wrong for the bug".
+
+    `remaining_seconds` walks forward to the last entry that is the same file and counts the
+    breaks in between, because a 23-minute episode cut into four pieces would otherwise say
+    "3 min left" eighteen minutes before it ends. It is counting to the next commercial, and
+    reads as counting to the end of the show.
+    """
+    if not entries:
+        return None
+    slot = _feature_index(entries, index)
+    item = entries[slot]
+    path = item.get("path") or ""
+    show, episode = describe(path) if path else ("", "")
+
+    last = slot
+    for position in range(slot + 1, len(entries)):
+        if (entries[position].get("path") or "") == path:
+            last = position
+    if last == slot:
+        remaining = max(0.0, float(item.get("duration") or 0) - (offset if slot == index else 0.0))
+    else:
+        total = sum(float(entries[p].get("duration") or 0) for p in range(slot, last + 1))
+        # How far into the programme's own span we are, counting the breaks already shown.
+        gone = sum(float(entries[p].get("duration") or 0) for p in range(slot, index)) + offset
+        remaining = max(0.0, total - gone)
+
+    return {
+        "show": show or None,
+        "episode": episode or None,
+        "content_type": item.get("content_type"),
+        "remaining_seconds": round(remaining, 2),
+        "in_break": slot != index,
+    }
+
+
 def now(channel: int, at: float | None = None) -> dict:
     """What channel `channel` is playing, and how far into it."""
     at = time.time() if at is None else at
@@ -212,11 +280,12 @@ def now(channel: int, at: float | None = None) -> dict:
     mapping = plexmap.load()
     elapsed = at - _epoch(start)
     running = 0.0
-    current = nxt = None
+    current = nxt = feature = None
     for i, item in enumerate(entries):
         span = float(item.get("duration") or 0)
         if running + span > elapsed:
             current = _entry(item, elapsed - running, mapping)
+            feature = _feature(entries, i, elapsed - running, mapping)
             if i + 1 < len(entries):
                 nxt = _entry(entries[i + 1], 0.0, mapping)
             break
@@ -229,6 +298,9 @@ def now(channel: int, at: float | None = None) -> dict:
         "block_ends_at": round(_epoch(end), 3),
         "server_time": round(at, 3),
         "now": current,
+        # What is actually on, as opposed to what is on screen this second. During a break
+        # `now` is the advert; this is the programme it is interrupting.
+        "feature": feature,
         "next": nxt,
         "map": None if not mapping else {
             "built_at": mapping.get("built_at"),
