@@ -469,7 +469,52 @@ def check_sources(channels: list[Channel]) -> list[str]:
     return problems
 
 
-def audit(channels: list[Channel]) -> tuple[list[str], list[str], list[str], list[str]]:
+def _catalogue_index(catalogue: dict | None = None) -> dict[str, list[dict]]:
+    """Every catalogued title, keyed by the path a lineup could name it with.
+
+    **List-valued, and that is not defensive.** 31 paths on this box are claimed by more than
+    one title — 154 titles share the commercials Kids pool alone — so a scalar index answers
+    "what is at this path" with whichever title happened to be written last. On a source that
+    is a pool or a library that is a coin toss between ratings, and the coin decides whether
+    a channel is refused or waved through.
+
+    Keyed by both the folder and the individual files, because a multi-version film loose in
+    a library root has no folder of its own and the catalogue records its files instead.
+
+    **Keys are lowercased**, because the share is mounted over CIFS and CIFS is
+    case-insensitive: `Kids TV/Paw Patrol` and `Kids TV/PAW Patrol` are one folder, and the
+    lineup happens to spell it the second way while Plex reports the first. Exact matching
+    would have called Paw Patrol unknown on both children's channels — and with the refusal
+    below, blocked the whole dial over a capital letter.
+    """
+    from .library import load as load_catalogue  # noqa: PLC0415
+
+    cat = catalogue if catalogue is not None else load_catalogue()
+    index: dict[str, list[dict]] = {}
+    for row in cat.get("titles", []):
+        for key in filter(None, [row.get("path")] + list(row.get("paths") or [])):
+            index.setdefault(key.rstrip("/").lower(), []).append(row)
+    return index
+
+
+def _titles_under(index: dict[str, list[dict]], folder: str) -> list[dict]:
+    """Everything at or beneath a path. An exact scan, no tail matching, no guessing."""
+    folder = folder.rstrip("/").lower()
+    prefix = folder + "/"
+    seen: set[int] = set()
+    out: list[dict] = []
+    for key, rows in index.items():
+        if key != folder and not key.startswith(prefix):
+            continue
+        for row in rows:
+            if id(row) not in seen:
+                seen.add(id(row))
+                out.append(row)
+    return out
+
+
+def audit(channels: list[Channel], *, catalogue: dict | None = None
+          ) -> tuple[list[str], list[str], list[str], list[str], list[str]]:
     """Refuse a lineup that puts unrated content on a channel rated for children.
 
     This exists because the dial is meant to be *proposed* by a model reading a manifest,
@@ -492,11 +537,18 @@ def audit(channels: list[Channel]) -> tuple[list[str], list[str], list[str], lis
     # Plex has already matched the library against the standard databases and knows the
     # broadcast rating, which beats any guess made from a folder name. Optional: the audit
     # must still work, and still refuse, on a box where Plex is not configured.
+    # The catalogue first. `audit()` used to do from_config -> library() -> fill_show_paths
+    # (one request per show) -> path_index on every call — a hundred-odd Plex requests, which
+    # the editor would then make per draft change. The catalogue answers the same questions
+    # from a local file with exact paths, so the guard gets faster and stops guessing at once.
+    cat_index = _catalogue_index(catalogue)
+
     plex_index: dict = {}
     try:
         from .plex import fill_show_paths, from_config, path_index
         client = from_config()
-        if client is not None:
+        # Only when there is no catalogue to read. A box mid-setup still gets the guard.
+        if client is not None and not cat_index:
             library = client.library()
             # Measured on this server: 0 of 77 shows carried a path of their own, so every
             # television source resolved to nothing and this audit had been running on the
@@ -517,6 +569,16 @@ def audit(channels: list[Channel]) -> tuple[list[str], list[str], list[str], lis
     # existed, because a library root holds many films and Plex indexes each film, not the
     # root. Silence is the wrong answer to "I do not know".
     unjudged: list[str] = []
+    # Exemptions that do nothing.
+    #
+    # The watershed check reaches `if code not in OVER_14A: continue` *before* it consults
+    # `rated_daytime`, so an override on a title Plex rates below the line is never read and
+    # never mentioned. It sits in the file looking like it is holding something up. Live:
+    # `Long Way Up` is TV-14, and both channel 9 and channel 15 exempt it for nothing.
+    #
+    # Distinct from the staleness check further down, which only catches an override whose
+    # path no channel draws from. These paths *are* sources; they simply do not need saving.
+    inert: list[str] = []
     # A source that is a whole library rather than one title.
     #
     # Its own tier, because it is a different claim. "Californication is rated TV-MA and airs
@@ -554,17 +616,13 @@ def audit(channels: list[Channel]) -> tuple[list[str], list[str], list[str], lis
 
         for tag, hours in daylight.items():
             for folder in channel.sources.get(tag, []):
-                item = plex_lookup(plex_index, Path(folder)) if plex_index else None
-                if item is not None:
-                    code = (item.content_rating or "").split("/")[-1].strip().lower()
-                    worst = item.content_rating
-                else:
-                    # No item for the folder itself. That is the normal shape of a film
-                    # library — the root holds many films and Plex indexes each film — so
-                    # descend and judge by the strictest rating inside it. A folder is only
-                    # as safe for teatime as the worst thing it can play.
-                    code, worst, total, over = _strictest_inside(plex_index, Path(folder))
-                    if code is not None and code in OVER_14A and folder not in channel.rated_daytime:
+                rows = _titles_under(cat_index, folder) if cat_index else []
+                if rows:
+                    # The strictest of everything at or under this path, never "the" title
+                    # there. A source is only as safe for teatime as the worst thing it can
+                    # play, and 31 paths here are shared by more than one title.
+                    code, worst, total, over = _strictest_of(rows)
+                    if over and total > 1 and folder not in channel.rated_daytime:
                         span = f"{min(hours):02d}:00-{max(hours) + 1:02d}:00"
                         mixed.append(
                             f"channel {channel.number} ({channel.name!r}) draws {folder!r} at "
@@ -573,6 +631,21 @@ def audit(channels: list[Channel]) -> tuple[list[str], list[str], list[str], lis
                             f"this check cannot see which"
                         )
                         continue
+                elif plex_index:
+                    item = plex_lookup(plex_index, Path(folder))
+                    code = (item.content_rating or "").split("/")[-1].strip().lower() if item else None
+                    worst = item.content_rating if item else None
+                    total = over = 0
+                    if item is None:
+                        code, worst, total, over = _strictest_inside(plex_index, Path(folder))
+                else:
+                    code = worst = None
+                    total = over = 0
+                if code is None:
+                    # No item for the folder itself. That is the normal shape of a film
+                    # library — the root holds many films and Plex indexes each film — so
+                    # descend and judge by the strictest rating inside it. A folder is only
+                    # as safe for teatime as the worst thing it can play.
                     if code is None:
                         # Genuinely nothing to go on: Plex is unreachable, or it holds
                         # nothing under this path at all. Say so rather than skipping in
@@ -585,6 +658,12 @@ def audit(channels: list[Channel]) -> tuple[list[str], list[str], list[str], lis
                         )
                         continue
                 if code not in OVER_14A:
+                    if folder in channel.rated_daytime:
+                        inert.append(
+                            f"channel {channel.number} ({channel.name!r}) exempts {folder!r} "
+                            f"from the {WATERSHED_HOUR}:00 watershed, but it is rated "
+                            f"{worst} — the exemption does nothing and can go"
+                        )
                     continue
                 if folder in channel.rated_daytime:
                     overrides.append(
@@ -682,7 +761,30 @@ def audit(channels: list[Channel]) -> tuple[list[str], list[str], list[str], lis
                     f"from it"
                 )
 
-    return problems, overrides, unjudged, mixed
+    return problems, overrides, unjudged, mixed, inert
+
+
+def _strictest_of(rows: list[dict]) -> tuple[str | None, str | None, int, int]:
+    """The harshest rating among catalogue rows, with the counts that make it readable.
+
+    One R film among two hundred is a different thing from a library that is mostly R, and
+    the warning says which. Unrated counts as strictest, because `OVER_14A` already treats it
+    that way and this must not be the one place that quietly disagrees.
+    """
+    worst_code: str | None = None
+    worst_text: str | None = None
+    total = over = 0
+    for row in rows:
+        total += 1
+        raw = row.get("content_rating") or ""
+        code = raw.split("/")[-1].strip().lower()
+        if code in OVER_14A:
+            over += 1
+            if worst_code not in OVER_14A:
+                worst_code, worst_text = code, raw or "nothing"
+        elif worst_code is None:
+            worst_code, worst_text = code, raw
+    return worst_code, worst_text, total, over
 
 
 def _strictest_inside(plex_index: dict,
@@ -1085,12 +1187,32 @@ def apply(lineup_path: Path, media_root: Path, ads_root: Path,
 
     # Both checks before anything is written. A lineup that fails either is not partially
     # applied.
-    problems, overrides, unjudged, mixed = audit(channels)
+    problems, overrides, unjudged, mixed, inert = audit(channels)
     # Said out loud on every build, not just the first. An override is a standing decision
     # about what a child may be shown, and the failure mode of these is that they go quiet
     # and stop being reconsidered.
     for note in overrides:
         print(f"  vetted: {note}")
+    # The tiers the audit grew today were visible only under --dry-run, which is the one path
+    # that does not write anything. On the path that does, they said nothing at all.
+    for note in inert:
+        print(f"  inert:  {note}")
+    for note in mixed:
+        print(f"  mixed:  {note}")
+    for note in unjudged:
+        print(f"  UNJUDGED: {note}")
+
+    # Re-basing the guard on a local file must not make it fail open on the one channel where
+    # failure means a child sees something. A kids or family channel with a source nobody can
+    # rate, inside children's hours, is refused rather than waved through.
+    guarded = {c.number for c in channels if c.rating in ("kids", "family")}
+    blind = [note for note in unjudged
+             if any(f"channel {n} " in note for n in guarded)]
+    if blind:
+        raise UnsafeLineup(
+            "This lineup has sources on a channel rated for children that nothing can "
+            "rate:\n  " + "\n  ".join(blind)
+        )
     if problems:
         raise UnsafeLineup(
             "This lineup would place content not marked for children on a channel rated "
@@ -1179,13 +1301,18 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     channels = load(args.lineup)
-    problems, overrides, unjudged, mixed = audit(channels)
+    problems, overrides, unjudged, mixed, inert = audit(channels)
     clashes = check_reserved(channels)
     missing = check_sources(channels)
     if args.dry_run:
         print()
         # Between VETTED and REFUSED on purpose: not safe, not unsafe, unknown — and the
         # whole point of the list is that "unknown" used to print as nothing at all.
+        if inert:
+            print("  INERT — these exemptions do nothing:\n")
+            for note in inert:
+                print(f"    · {note}")
+            print()
         if mixed:
             print("  MIXED — this source can play something above the line before "
                   f"{WATERSHED_HOUR}:00:\n")
