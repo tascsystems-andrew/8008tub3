@@ -184,6 +184,86 @@ BROWSE_LIMIT = 300
 COUNT_LIMIT = 80
 
 
+def dial_week() -> dict:
+    """The dial as a week, plus what the guard thinks of it.
+
+    One request, because the page is a single view and two round trips would let the grid and
+    the audit disagree about which lineup they are describing.
+    """
+    from pathlib import Path as _Path  # noqa: PLC0415
+
+    from . import lineup as L  # noqa: PLC0415
+
+    path = _Path(__file__).resolve().parent.parent / "lineup.json"
+    try:
+        channels = L.load(path)
+    except Exception as exc:  # noqa: BLE001 - the page must say why, not 500
+        return {"ok": False, "error": f"could not read the lineup: {exc}"}
+
+    days = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+    out = []
+    for channel in sorted(channels, key=lambda c: c.number):
+        week: dict[str, list] = {}
+        for day in days:
+            hours: list = [None] * 24
+            for part in channel.dayparts:
+                if part.days and day not in _expand_days(part.days):
+                    continue
+                for hour in part.hours():
+                    hours[hour % 24] = {"tag": part.tag,
+                                        "name": getattr(part, "name", "") or part.tag}
+            if not channel.dayparts:
+                # No dayparts at all: one tag round the clock. Drawn, rather than left blank,
+                # because this is the shape that makes a channel called SATURDAY AM play
+                # cartoons at three on a Tuesday.
+                tag = next(iter(channel.sources), "")
+                if tag:
+                    hours = [{"tag": tag, "name": tag}] * 24
+            week[day] = hours
+        out.append({
+            "number": channel.number,
+            "name": channel.name,
+            "rating": channel.rating,
+            "kind": channel.kind,
+            "flat": not channel.dayparts,
+            "week": week,
+        })
+
+    try:
+        problems, overrides, unjudged, mixed, inert = L.audit(channels)
+        clashes = L.check_reserved(channels)
+    except Exception as exc:  # noqa: BLE001
+        problems, overrides, unjudged, mixed, inert, clashes = [str(exc)], [], [], [], [], []
+
+    return {
+        "ok": True,
+        "source": str(path),
+        "channels": out,
+        "audit": {
+            "problems": list(problems) + list(clashes),
+            "unjudged": unjudged,
+            "mixed": mixed,
+            "inert": inert,
+            "vetted": len(overrides),
+        },
+    }
+
+
+def _expand_days(days: list[str]) -> set[str]:
+    """`weekdays` and `weekend` are shorthand the lineup already uses."""
+    names = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+    out: set[str] = set()
+    for entry in days:
+        key = str(entry).strip().lower()
+        if key == "weekdays":
+            out |= set(names[:5])
+        elif key in ("weekend", "weekends"):
+            out |= set(names[5:])
+        else:
+            out.add(key)
+    return out
+
+
 def browse(where: str) -> dict:
     """List folders for the picker.
 
@@ -1282,6 +1362,26 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(exc.code, exc.reason)
             except Exception:  # noqa: BLE001 - a dropped player is not a server fault
                 pass
+            return
+
+        if path == "/week":
+            # Aliased for the reason the comment below records: a function-local import binds
+            # the name for the whole function, and a bare `PAGE` here would shadow the
+            # module-level one for every other route.
+            from .weekpage import PAGE as WEEK_PAGE  # noqa: PLC0415
+            body = WEEK_PAGE.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
+
+        if path == "/api/dial/week":
+            self._json(dial_week())
             return
 
         if path == "/tv":
